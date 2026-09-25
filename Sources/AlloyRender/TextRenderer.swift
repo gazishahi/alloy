@@ -64,6 +64,9 @@ public struct RenderFrame {
     /// Colors for a line, relative to its start; nil draws it in the text color.
     public var styles: ((Int) -> [StyleSpan])?
     public var decorations: [Decoration] = []
+    /// A tint across a whole line's rows, edge to edge (a diff's added and removed lines).
+    /// Asked only for the lines on screen.
+    public var lineBackground: ((Int) -> SIMD4<Float>?)?
 
     public init(scrollY: CGFloat, size: CGSize, scale: CGFloat, selections: [Selection], caretVisible: Bool = true,
                 theme: RenderTheme, styles: ((Int) -> [StyleSpan])? = nil) {
@@ -237,6 +240,9 @@ public final class TextRenderer {
             let lineStart = text.offset(ofLine: line)
             let lineRange = lineStart..<(lineStart + laid.text.utf16.count)
             let spans = frame.styles?(line) ?? []
+            if let tint = frame.lineBackground?(line) {
+                solids.append(Quad(rect: rect(0, top, viewportWidth, CGFloat(laid.rows.count) * lineHeight), uv: .zero, color: tint, kind: 0))
+            }
 
             // Selections: a band per row they cover, reaching the edge when they continue past it.
             for selection in frame.selections where !selection.isCaret {

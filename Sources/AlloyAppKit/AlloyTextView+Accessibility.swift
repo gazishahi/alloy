@@ -18,7 +18,23 @@ extension AlloyTextView {
 
     private var ax: TextBuffer? { editor?.buffer }
 
-    public override func accessibilityValue() -> Any? { ax?.string ?? "" }
+    /// Set when lines carry spoken prefixes: then every query answers about that text.
+    private var spoken: SpokenText? { editor?.spokenText }
+
+    private func toValue(_ offset: Int) -> Int {
+        guard let spoken, let text = ax?.text else { return offset }
+        return spoken.toValue(offset, in: text)
+    }
+    private func toBuffer(_ offset: Int) -> Int { spoken?.toBuffer(offset) ?? offset }
+    private func valueRange(_ range: Range<Int>) -> NSRange {
+        let lower = toValue(range.lowerBound), upper = toValue(range.upperBound)
+        return NSRange(location: lower, length: upper - lower)
+    }
+
+    public override func accessibilityValue() -> Any? {
+        if let spoken { return spoken.string as String }
+        return ax?.string ?? ""
+    }
 
     /// VoiceOver can replace the text outright; it's one undoable edit, like a paste.
     public override func setAccessibilityValue(_ value: Any?) {
@@ -27,10 +43,11 @@ extension AlloyTextView {
         editor.textInputChanged()
     }
 
-    public override func accessibilityNumberOfCharacters() -> Int { ax?.text.utf16Count ?? 0 }
+    public override func accessibilityNumberOfCharacters() -> Int { spoken?.length ?? ax?.text.utf16Count ?? 0 }
 
     public override func accessibilitySelectedText() -> String? {
         guard let buffer = ax, let range = buffer.selections.first?.range else { return nil }
+        if let spoken { return spoken.string.substring(with: valueRange(range)) }
         return buffer.text.substring(range)
     }
 
@@ -40,21 +57,20 @@ extension AlloyTextView {
     }
 
     public override func accessibilitySelectedTextRange() -> NSRange {
-        let range = ax?.selections.first?.range ?? 0..<0
-        return NSRange(location: range.lowerBound, length: range.count)
+        valueRange(ax?.selections.first?.range ?? 0..<0)
     }
 
     public override func setAccessibilitySelectedTextRange(_ range: NSRange) {
-        setSelections([Selection(anchor: range.location, head: range.location + range.length)])
+        setSelections([Selection(anchor: toBuffer(range.location), head: toBuffer(range.location + range.length))])
     }
 
     public override func accessibilitySelectedTextRanges() -> [NSValue]? {
-        ax?.selections.map { NSValue(range: NSRange(location: $0.range.lowerBound, length: $0.range.count)) }
+        ax?.selections.map { NSValue(range: valueRange($0.range)) }
     }
 
     public override func setAccessibilitySelectedTextRanges(_ ranges: [NSValue]?) {
         guard let ranges, !ranges.isEmpty else { return }
-        setSelections(ranges.map { let r = $0.rangeValue; return Selection(anchor: r.location, head: r.location + r.length) })
+        setSelections(ranges.map { let r = $0.rangeValue; return Selection(anchor: toBuffer(r.location), head: toBuffer(r.location + r.length)) })
     }
 
     public override func accessibilityInsertionPointLineNumber() -> Int {
@@ -67,16 +83,18 @@ extension AlloyTextView {
         guard let editor else { return NSRange(location: 0, length: 0) }
         let viewport = editor.viewport
         let layout = editor.documentLayout
-        let top = layout.offset(at: CGPoint(x: 0, y: viewport.minY))
-        let bottom = layout.offset(at: CGPoint(x: .greatestFiniteMagnitude, y: viewport.maxY))
+        let top = toValue(layout.offset(at: CGPoint(x: 0, y: viewport.minY)))
+        let bottom = toValue(layout.offset(at: CGPoint(x: .greatestFiniteMagnitude, y: viewport.maxY)))
         return NSRange(location: top, length: max(0, bottom - top))
     }
 
     public override func accessibilityLine(for index: Int) -> Int {
-        ax?.text.line(containing: index) ?? 0
+        if let spoken { return spoken.line(ofValue: index) }
+        return ax?.text.line(containing: index) ?? 0
     }
 
     public override func accessibilityRange(forLine line: Int) -> NSRange {
+        if let spoken { return line >= 0 && line < spoken.lineCount ? spoken.rangeOfLine(line) : NSRange(location: NSNotFound, length: 0) }
         guard let text = ax?.text, line >= 0, line < text.lineCount else { return NSRange(location: NSNotFound, length: 0) }
         // Including its "\n", as NSTextView reports a line.
         let start = text.offset(ofLine: line)
@@ -85,7 +103,11 @@ extension AlloyTextView {
     }
 
     public override func accessibilityString(for range: NSRange) -> String? {
-        ax?.text.substring(range.location..<(range.location + range.length))
+        if let spoken {
+            let clamped = NSIntersectionRange(range, NSRange(location: 0, length: spoken.length))
+            return spoken.string.substring(with: clamped)
+        }
+        return ax?.text.substring(range.location..<(range.location + range.length))
     }
 
     public override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {
@@ -106,8 +128,8 @@ extension AlloyTextView {
     public override func accessibilityFrame(for range: NSRange) -> NSRect {
         guard let editor, let window else { return .zero }
         let layout = editor.documentLayout
-        let start = layout.caretRect(at: range.location)
-        let end = layout.caretRect(at: range.location + range.length)
+        let start = layout.caretRect(at: toBuffer(range.location))
+        let end = layout.caretRect(at: toBuffer(range.location + range.length))
         let rect: CGRect
         if end.minY == start.minY {
             rect = CGRect(x: start.minX, y: start.minY, width: max(1, end.minX - start.minX), height: start.height)
@@ -129,11 +151,15 @@ extension AlloyTextView {
         if offset > 0, caret.minX > local.x, local.y >= caret.minY, local.y < caret.maxY, let buffer = ax {
             offset = buffer.previousBoundary(before: offset)
         }
-        return accessibilityRange(for: offset)
+        return accessibilityRange(for: toValue(offset))
     }
 
     /// The composed character at an index (a whole emoji, an accented letter).
     public override func accessibilityRange(for index: Int) -> NSRange {
+        if let spoken {
+            guard index >= 0, index < spoken.length else { return NSRange(location: NSNotFound, length: 0) }
+            return spoken.string.rangeOfComposedCharacterSequence(at: index)
+        }
         guard let buffer = ax, index >= 0, index < buffer.text.utf16Count else { return NSRange(location: NSNotFound, length: 0) }
         let text = buffer.text
         let line = text.line(containing: index)

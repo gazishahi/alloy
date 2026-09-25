@@ -19,6 +19,8 @@ public final class AlloyEditorView: NSView {
     public private(set) var documentLayout: DocumentLayout
     public var theme: RenderTheme = .light { didSet { setNeedsRender() } }
     public var styles: ((Int) -> [StyleSpan])? { didSet { setNeedsRender() } }
+    /// A tint across a line, edge to edge; asked only for lines on screen.
+    public var lineBackground: ((Int) -> SIMD4<Float>?)? { didSet { setNeedsRender() } }
     /// Wrap to the view's width (Make's default), or not.
     public var wrapsLines = true { didSet { updateWrapWidth() } }
     public weak var delegate: AlloyEditorDelegate?
@@ -35,6 +37,20 @@ public final class AlloyEditorView: NSView {
     public var onUndoRedo: ((Bool) -> Void)?
     /// What VoiceOver calls the editor ("Editor", or the file's name).
     public var accessibilityName: String? = nil
+    /// Words VoiceOver says before a line (zero-based): a diff's "added, " and "removed, ",
+    /// which the eye gets from color. Every accessibility query then answers about that text.
+    public var accessibilityLinePrefix: ((Int) -> String?)? { didSet { spokenCache = nil } }
+    private var spokenCache: (generation: Int, text: SpokenText)?
+    /// Bumped by every change to the text, for what's cached from it.
+    private(set) var textGeneration = 0
+
+    var spokenText: SpokenText? {
+        guard let accessibilityLinePrefix else { return nil }
+        if let cached = spokenCache, cached.generation == textGeneration { return cached.text }
+        let text = SpokenText(buffer.text, prefix: accessibilityLinePrefix)
+        spokenCache = (textGeneration, text)
+        return text
+    }
 
     private let documentView = AlloyTextView()
     /// The text view is first responder.
@@ -94,6 +110,7 @@ public final class AlloyEditorView: NSView {
 
     /// Shows another buffer (a tab switch).
     public func setBuffer(_ buffer: TextBuffer) {
+        textGeneration += 1
         self.buffer.onChange = nil
         self.buffer = buffer
         buffer.onChange = { [weak self] change in self?.textChanged(change) }
@@ -106,6 +123,7 @@ public final class AlloyEditorView: NSView {
     public var onTextChange: ((TextChange) -> Void)?
 
     private func textChanged(_ change: TextChange) {
+        textGeneration += 1
         onTextChange?(change)
         documentLayout.update(buffer.text, edits: change.edits)
         updateDocumentHeight()
@@ -283,6 +301,7 @@ public final class AlloyEditorView: NSView {
 
     /// The buffer's text was replaced outside the edit path (`TextBuffer.reset`): lay it out again.
     public func reloadText() {
+        textGeneration += 1
         documentLayout.reset(buffer.text)
         updateDocumentHeight()
         gutter.needsDisplay = true
@@ -333,12 +352,12 @@ public final class AlloyEditorView: NSView {
     /// What's drawn: the whole clip view in document points, its content insets included, so the
     /// text scrolls on under chrome floating over the editor (Make's tab strip and bottom bar)
     /// instead of stopping at its edge. Above the document's top this starts at a negative y.
-    var drawingRect: CGRect { scrollView.contentView.bounds }
+    public var drawingRect: CGRect { scrollView.contentView.bounds }
 
     /// The part of the document on screen and not under an inset (the Find bar, floating
     /// chrome), in document points. The document view sits at the clip view's origin, so clip
     /// coordinates are document coordinates.
-    var viewport: CGRect {
+    public var viewport: CGRect {
         let clip = scrollView.contentView
         let insets = clip.contentInsets
         let bounds = clip.bounds
@@ -446,6 +465,7 @@ public final class AlloyEditorView: NSView {
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
         frame.decorations = decorations
+        frame.lineBackground = lineBackground
         if let marked = documentView.composingRange {
             frame.decorations.append(Decoration(range: marked, color: theme.text, style: .underline))
         }

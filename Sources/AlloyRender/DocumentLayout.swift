@@ -133,7 +133,7 @@ public final class DocumentLayout {
     private var rowIndex: RowIndex
     private var cache: [String: LaidOutLine] = [:]
     private var cacheOrder: [String] = []
-    static let cacheLimit = 4_000
+    static let cacheLimit = 1_000
 
     public init(text: Rope, font: CTFont, tabSize: Int = 4) {
         self.text = text

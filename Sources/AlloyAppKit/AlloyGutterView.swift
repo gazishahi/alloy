@@ -20,13 +20,17 @@ public struct GutterMark: Equatable {
 public final class AlloyGutterView: NSView {
     public static let width: CGFloat = 44
     weak var editor: AlloyEditorView?
-    public var font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) { didSet { numbers.removeAll(); needsDisplay = true } }
+    public var font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) { didSet { numbers.removeAll(); labels.removeAll(); needsDisplay = true } }
     public var numberColor = NSColor.tertiaryLabelColor { didSet { needsDisplay = true } }
     public var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
     /// Marks by one-based line.
     public var marks: [Int: [GutterMark]] = [:] { didSet { needsDisplay = true } }
     /// A click on a line (one-based) that has marks.
     public var onClick: ((Int, NSEvent) -> Void)?
+    /// What the gutter shows for a line (zero-based) in place of its number; nil shows nothing
+    /// (a diff's old and new numbers, blank beside a file's header).
+    public var label: ((Int) -> String?)? { didSet { labels.removeAll(); needsDisplay = true } }
+    private var labels: [String: (line: CTLine, width: CGFloat)] = [:]
 
     public override var isFlipped: Bool { true }
 
@@ -34,9 +38,19 @@ public final class AlloyGutterView: NSView {
     /// a frame while scrolling, more than the text itself.
     private var numbers: [Int: (line: CTLine, width: CGFloat)] = [:]
 
+    private func shape(_ text: String) -> (line: CTLine, width: CGFloat) {
+        if let cached = labels[text] { return cached }
+        if labels.count > 600 { labels.removeAll() }
+        let string = NSAttributedString(string: text, attributes: [.font: font, NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true])
+        let line = CTLineCreateWithAttributedString(string)
+        let entry = (line, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        labels[text] = entry
+        return entry
+    }
+
     private func number(_ value: Int) -> (line: CTLine, width: CGFloat) {
         if let cached = numbers[value] { return cached }
-        if numbers.count > 4_000 { numbers.removeAll() }
+        if numbers.count > 600 { numbers.removeAll() }
         // The color comes from the context, so an appearance change needs no reshaping.
         let string = NSAttributedString(string: "\(value)", attributes: [.font: font, NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true])
         let line = CTLineCreateWithAttributedString(string)
@@ -63,9 +77,17 @@ public final class AlloyGutterView: NSView {
             let lineHeight = layout.lineHeight
             let height = CGFloat(laid.rows.count) * lineHeight
             // On the text's baseline (row top + the text font's ascent), right-aligned.
-            let (shaped, width) = number(line + 1)
-            context.textPosition = CGPoint(x: Self.width - width - 8, y: rowTop + layout.ascent)
-            CTLineDraw(shaped, context)
+            if let label {
+                if let text = label(line), !text.isEmpty {
+                    let (shaped, width) = shape(text)
+                    context.textPosition = CGPoint(x: bounds.width - width - 8, y: rowTop + layout.ascent)
+                    CTLineDraw(shaped, context)
+                }
+            } else {
+                let (shaped, width) = number(line + 1)
+                context.textPosition = CGPoint(x: bounds.width - width - 8, y: rowTop + layout.ascent)
+                CTLineDraw(shaped, context)
+            }
             for mark in marks[line + 1] ?? [] {
                 mark.color.setFill()
                 switch mark.style {

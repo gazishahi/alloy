@@ -90,14 +90,17 @@ public final class SyntaxHighlighter {
     private var editsDuringParse: [InputEdit] = []
     private var needsParse = false
 
-    public init?(fileExtension: String, text: Rope, theme: SyntaxTheme = .side(dark: false)) {
+    /// `parseInBackground`: even a small document's first parse happens off the main thread (its
+    /// lines are uncolored until it lands, and `onInvalidate` says when): for a view that
+    /// creates highlighters while it scrolls.
+    public init?(fileExtension: String, text: Rope, theme: SyntaxTheme = .side(dark: false), parseInBackground background: Bool = false) {
         guard let language = SyntaxLanguage.forExtension(fileExtension) else { return nil }
         self.language = language
         self.theme = theme
         self.text = text
         try? parser.setLanguage(language.language)
         try? backgroundParser.setLanguage(language.language)
-        if text.utf16Count <= Self.synchronousLimit {
+        if !background, text.utf16Count <= Self.synchronousLimit {
             let start = CACurrentMediaTime()
             tree = Self.parse(parser, text: text, oldTree: nil)
             lastParseMilliseconds = (CACurrentMediaTime() - start) * 1000

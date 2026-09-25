@@ -115,3 +115,33 @@ final class CaretBlinkTests: XCTestCase {
         XCTAssertNil(AlloyEditorView.blinkPeriods, "on forever: a solid caret")
     }
 }
+
+@MainActor
+final class SpokenPrefixTests: XCTestCase {
+    /// A diff says "added, " and "removed, " where the eye sees color, and every query agrees
+    /// with that text: lines, ranges, the selection, where a range is on screen.
+    func testLinePrefixesAreReadAndMapped() throws {
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        let editor = try AlloyEditorView(buffer: TextBuffer("same\nnew\nold"), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = editor
+        window.layoutIfNeeded()
+        editor.layout()
+        editor.accessibilityLinePrefix = { [nil, "added, ", "removed, "][$0] }
+        let view = editor.textView
+        XCTAssertEqual(view.accessibilityValue() as? String, "same\nadded, new\nremoved, old")
+        XCTAssertEqual(view.accessibilityNumberOfCharacters(), 28)
+        XCTAssertEqual(view.accessibilityRange(forLine: 1), NSRange(location: 5, length: 11))
+        XCTAssertEqual(view.accessibilityString(for: view.accessibilityRange(forLine: 2)), "removed, old")
+        XCTAssertEqual(view.accessibilityLine(for: 20), 2)
+        editor.buffer.setSelections([Selection(anchor: 5, head: 8)])
+        XCTAssertEqual(view.accessibilitySelectedTextRange(), NSRange(location: 12, length: 3), "\"new\" after its prefix")
+        XCTAssertEqual(view.accessibilitySelectedText(), "new")
+        view.setAccessibilitySelectedTextRange(NSRange(location: 25, length: 2))
+        XCTAssertEqual(editor.buffer.selections, [Selection(anchor: 9, head: 11)], "back in the buffer: \"ol\"")
+        XCTAssertGreaterThan(view.accessibilityFrame(for: NSRange(location: 12, length: 3)).width, 1)
+        editor.buffer.apply([TextEdit(range: 0..<4, text: "SAME")], kind: .other)
+        XCTAssertEqual(view.accessibilityValue() as? String, "SAME\nadded, new\nremoved, old", "follows edits")
+        window.orderOut(nil)
+    }
+}
