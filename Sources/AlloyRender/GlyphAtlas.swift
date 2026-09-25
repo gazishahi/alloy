@@ -17,9 +17,13 @@ struct AtlasEntry {
 /// it rather than snapped to whole pixels.
 @MainActor
 final class GlyphAtlas {
-    let texture: MTLTexture
-    let size: Int
+    private(set) var texture: MTLTexture
+    private(set) var size: Int
+    private let device: MTLDevice
     static let subpixelSteps = 4
+    /// It starts small (4 MB) and doubles when a document needs more glyphs than fit, up to this
+    /// (64 MB); past it, it starts over. Most documents never grow it.
+    static let maximumSize = 4096
 
     private struct Key: Hashable {
         let font: String
@@ -36,12 +40,17 @@ final class GlyphAtlas {
     /// Bumped when the atlas fills and starts over; a frame drawn from older entries redraws.
     private(set) var generation = 0
 
-    init(device: MTLDevice, size: Int = 2048) {
+    init(device: MTLDevice, size: Int = 1024) {
+        self.device = device
         self.size = size
+        texture = Self.makeTexture(device: device, size: size)
+    }
+
+    private static func makeTexture(device: MTLDevice, size: Int) -> MTLTexture {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false)
         descriptor.usage = .shaderRead
         descriptor.storageMode = .shared
-        texture = device.makeTexture(descriptor: descriptor)!
+        return device.makeTexture(descriptor: descriptor)!
     }
 
     var count: Int { entries.count }
@@ -74,7 +83,12 @@ final class GlyphAtlas {
             shelfHeight = 0
         }
         if penY + height + 1 > size {
-            // Full: start over. Text on screen is re-rasterized on the next frame.
+            // Full: twice the size if it can grow, else start over. Either way the text on
+            // screen is re-rasterized on the next frame.
+            if size < Self.maximumSize {
+                size *= 2
+                texture = Self.makeTexture(device: device, size: size)
+            }
             entries.removeAll()
             penX = 1
             penY = 1

@@ -137,3 +137,20 @@ final class TextRendererTests: XCTestCase {
         XCTAssertEqual(renderer.lastStats.visibleLines, 3)
     }
 }
+
+@MainActor
+final class GlyphAtlasTests: XCTestCase {
+    /// Starts small, doubles when full, and restarts (rather than grow forever) at its maximum.
+    func testTheAtlasGrowsWhenFull() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice(), "no Metal device")
+        let atlas = GlyphAtlas(device: device, size: 64)
+        let font = CTFontCreateWithName("Menlo" as CFString, 24, nil)
+        var glyphs = [CGGlyph](repeating: 0, count: 26)
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ".utf16)
+        CTFontGetGlyphsForCharacters(font, letters, &glyphs, letters.count)
+        for glyph in glyphs { for subpixel in 0..<4 { _ = atlas.entry(font: font, glyph: glyph, subpixel: subpixel, scale: 2, isColor: false) } }
+        XCTAssertGreaterThan(atlas.size, 64)
+        XCTAssertEqual(atlas.texture.width, atlas.size)
+        XCTAssertGreaterThan(atlas.generation, 0, "what was drawn from the old texture redraws")
+    }
+}

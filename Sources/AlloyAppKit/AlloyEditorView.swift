@@ -37,7 +37,14 @@ public final class AlloyEditorView: NSView {
     public var accessibilityName: String? = nil
 
     private let documentView = AlloyTextView()
-    private var isFocused = false
+    /// The text view is first responder.
+    private var hasFocus = false
+    /// The caret shows (and blinks) only while this editor has focus in the key window of the
+    /// active app, as NSTextView's does. It also keeps the GPU idle when Side isn't in front: a
+    /// caret blinking in a background window was a render pass every half second, which keeps the
+    /// graphics driver from releasing the ~90 MB it holds for rendering (it frees it after a few
+    /// idle seconds).
+    private var isFocused: Bool { hasFocus && (window?.isKeyWindow ?? false) && NSApp.isActive }
     private var caretOn = true
     private var blinkTimer: Timer?
     private let canvas = MetalCanvas()
@@ -133,7 +140,7 @@ public final class AlloyEditorView: NSView {
     }
 
     func focusChanged(_ focused: Bool) {
-        isFocused = focused
+        hasFocus = focused
         restartBlink()
         setNeedsRender()
     }
@@ -225,6 +232,22 @@ public final class AlloyEditorView: NSView {
         let link = displayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
+        let center = NotificationCenter.default
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            center.removeObserver(self, name: name, object: nil)
+            center.addObserver(self, selector: #selector(activeStateChanged), name: name, object: window)
+        }
+        for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+            center.removeObserver(self, name: name, object: nil)
+            center.addObserver(self, selector: #selector(activeStateChanged), name: name, object: nil)
+        }
+        setNeedsRender()
+    }
+
+    /// The window became or stopped being key, or the app active: the caret shows or hides, and
+    /// its blinking starts or stops.
+    @objc private func activeStateChanged() {
+        restartBlink()
         setNeedsRender()
     }
 
@@ -451,6 +474,9 @@ private final class MetalCanvas: NSView {
         super.init(frame: frame)
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
+        // Two drawables, not Core Animation's three: a frame here is well under a millisecond of
+        // GPU time, so a third buys nothing and costs a window-sized buffer (~20 MB at 2x).
+        metalLayer.maximumDrawableCount = 2
         metalLayer.isOpaque = true
         metalLayer.displaySyncEnabled = true
         wantsLayer = true
