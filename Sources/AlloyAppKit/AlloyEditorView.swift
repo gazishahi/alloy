@@ -63,7 +63,9 @@ public final class AlloyEditorView: NSView {
     private var isFocused: Bool { hasFocus && (window?.isKeyWindow ?? false) && NSApp.isActive }
     private var caretOn = true
     private var blinkTimer: Timer?
-    private let canvas = MetalCanvas()
+    private var canvas = MetalCanvas()
+    /// Whether the canvas holds drawables (it has drawn since it was made).
+    private var canvasHasDrawn = false
     private let renderer: TextRenderer
     private var displayLink: CADisplayLink?
     private var needsRender = true
@@ -244,7 +246,7 @@ public final class AlloyEditorView: NSView {
         super.viewDidMoveToWindow()
         displayLink?.invalidate()
         displayLink = nil
-        guard window != nil else { return }
+        guard window != nil else { releaseDrawables(); return }
         canvas.metalLayer.contentsScale = window?.backingScaleFactor ?? 2
         let link = displayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
@@ -259,6 +261,36 @@ public final class AlloyEditorView: NSView {
             center.addObserver(self, selector: #selector(activeStateChanged), name: name, object: nil)
         }
         setNeedsRender()
+    }
+
+    /// Hidden (a tab behind another, a stage not in front): nothing of it is on screen, so its
+    /// drawables go, a window-sized buffer each, and the last frame with them. Kept, they added
+    /// up: every editor a window had ever shown held two.
+    public override func viewDidHide() {
+        super.viewDidHide()
+        releaseDrawables()
+    }
+
+    /// Shown again: drawn now, in this pass, so the first frame on screen isn't an empty one.
+    public override func viewDidUnhide() {
+        super.viewDidUnhide()
+        guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
+        window?.layoutIfNeeded()
+        render()
+    }
+
+    /// A fresh canvas in place of the old one; the old layer and its drawables are freed.
+    private func releaseDrawables() {
+        guard canvasHasDrawn else { return }
+        let fresh = MetalCanvas()
+        fresh.metalLayer.device = renderer.device
+        fresh.metalLayer.contentsScale = canvas.metalLayer.contentsScale
+        fresh.frame = canvas.frame
+        scrollView.addSubview(fresh, positioned: .below, relativeTo: scrollView.contentView)
+        canvas.removeFromSuperview()
+        canvas = fresh
+        canvasHasDrawn = false
+        needsRender = true
     }
 
     /// The window became or stopped being key, or the app active: the caret shows or hides, and
@@ -433,6 +465,12 @@ public final class AlloyEditorView: NSView {
                 dropTimes.append(link.timestamp - countersStart)
             }
         }
+        // Hidden: nothing to draw into until it's shown, which draws at once.
+        if isHiddenOrHasHiddenAncestor {
+            lastFrameTimestamp = nil
+            if onFrame == nil { link.isPaused = true }
+            return
+        }
         guard needsRender else {
             lastFrameTimestamp = nil
             idleTicks += 1
@@ -461,6 +499,7 @@ public final class AlloyEditorView: NSView {
         needsRenderWasSet = true
         let waitStart = CACurrentMediaTime()
         guard let drawable = canvas.metalLayer.nextDrawable() else { needsRender = true; return }
+        canvasHasDrawn = true
         drawableWaitMilliseconds.append((CACurrentMediaTime() - waitStart) * 1000)
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
