@@ -50,9 +50,10 @@ public final class AlloyGutterView: NSView {
         bounds.fill()
         guard let editor else { return }
         let layout = editor.documentLayout
-        let viewport = editor.viewport
-        // The gutter's top edge sits where the viewport's does.
-        let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y + editor.scrollView.contentView.contentInsets.top
+        // Every line the editor draws, insets included, so numbers flow under floating chrome
+        // with their text. The clip view's top edge in the gutter's coordinates.
+        let viewport = editor.drawingRect
+        let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
@@ -83,8 +84,8 @@ public final class AlloyGutterView: NSView {
     /// The one-based line under a point in the gutter.
     public func line(at point: CGPoint) -> Int? {
         guard let editor else { return nil }
-        let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y + editor.scrollView.contentView.contentInsets.top
-        let documentY = editor.viewport.minY + (point.y - top)
+        let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y
+        let documentY = editor.drawingRect.minY + (point.y - top)
         return editor.documentLayout.line(atY: documentY).line + 1
     }
 

@@ -74,10 +74,10 @@ public final class AlloyEditorView: NSView {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
-        // Beneath the clip view (which, like the document view, draws nothing), positioned each
-        // frame on the visible part of the document (see `viewport`), so insets (the Find bar,
-        // floating chrome) never shift the text, and views the owner adds to the text view (Make's
-        // proposal cards) draw on top of it and scroll with it.
+        // Beneath the clip view (which, like the document view, draws nothing), covering it
+        // (see `drawingRect`): text flows under chrome that floats over the editor, insets never
+        // shift it, and views the owner adds to the text view (proposal cards) draw on top of it
+        // and scroll with it.
         scrollView.addSubview(canvas, positioned: .below, relativeTo: scrollView.contentView)
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
         buffer.onChange = { [weak self] change in self?.textChanged(change) }
@@ -184,6 +184,7 @@ public final class AlloyEditorView: NSView {
     /// frame after a pause (a file opened, the first key) 30–100 ms late.
     public func setNeedsRender() {
         needsRender = true
+        wake()
         guard !immediateRenderScheduled, CACurrentMediaTime() - lastRenderTime > displayInterval * 1.5 else { return }
         immediateRenderScheduled = true
         DispatchQueue.main.async { [weak self] in
@@ -198,6 +199,14 @@ public final class AlloyEditorView: NSView {
         }
     }
     private var immediateRenderScheduled = false
+    /// Display-link ticks in a row with nothing to draw. Past a few, the link pauses: an idle
+    /// editor shouldn't wake the app 120 times a second.
+    private var idleTicks = 0
+
+    private func wake() {
+        idleTicks = 0
+        if displayLink?.isPaused == true { displayLink?.isPaused = false }
+    }
     private var lastRenderTime: CFTimeInterval = 0
 
     public override func layout() {
@@ -289,6 +298,11 @@ public final class AlloyEditorView: NSView {
     /// The part of the document on screen and not under an inset (the Find bar, floating
     /// chrome), in document points: what's drawn. The document view sits at the clip view's
     /// origin, so clip coordinates are document coordinates.
+    /// What's drawn: the whole clip view in document points, its content insets included, so the
+    /// text scrolls on under chrome floating over the editor (Make's tab strip and bottom bar)
+    /// instead of stopping at its edge. Above the document's top this starts at a negative y.
+    var drawingRect: CGRect { scrollView.contentView.bounds }
+
     var viewport: CGRect {
         let clip = scrollView.contentView
         let insets = clip.contentInsets
@@ -316,7 +330,7 @@ public final class AlloyEditorView: NSView {
     private var countersStart = CACurrentMediaTime()
 
     /// Runs at the start of every display frame, before drawing (animations, tests).
-    public var onFrame: ((CADisplayLink) -> Void)?
+    public var onFrame: ((CADisplayLink) -> Void)? { didSet { if onFrame != nil { wake() } } }
 
     /// When frames actually reached the screen (Metal's presented times): the honest measure of
     /// dropped frames, since a frame that's drawn can still miss its vsync.
@@ -358,7 +372,13 @@ public final class AlloyEditorView: NSView {
                 dropTimes.append(link.timestamp - countersStart)
             }
         }
-        guard needsRender else { lastFrameTimestamp = nil; return }
+        guard needsRender else {
+            lastFrameTimestamp = nil
+            idleTicks += 1
+            if idleTicks > 30, onFrame == nil { link.isPaused = true }
+            return
+        }
+        idleTicks = 0
         lastFrameTimestamp = link.timestamp
         render()
     }
@@ -366,7 +386,7 @@ public final class AlloyEditorView: NSView {
     /// Draws now.
     public func render() {
         needsRender = false
-        let visible = viewport
+        let visible = drawingRect
         let size = visible.size
         guard size.width > 0, size.height > 0 else { return }
         let scale = canvas.metalLayer.contentsScale
@@ -381,7 +401,7 @@ public final class AlloyEditorView: NSView {
         let waitStart = CACurrentMediaTime()
         guard let drawable = canvas.metalLayer.nextDrawable() else { needsRender = true; return }
         drawableWaitMilliseconds.append((CACurrentMediaTime() - waitStart) * 1000)
-        var frame = RenderFrame(scrollY: scrollY, size: size, scale: scale, selections: buffer.selections,
+        var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
         frame.decorations = decorations
         if let marked = documentView.composingRange {
@@ -400,7 +420,7 @@ public final class AlloyEditorView: NSView {
 
     public var lastFrameStats: FrameStats { renderer.lastStats }
     /// Where the drawing surface sits in the scroll view (tests).
-    var canvasFrame: CGRect { canvas.frame }
+    public var canvasFrame: CGRect { canvas.frame }
 
     public func resetFrameCounters() {
         framesDrawn = 0

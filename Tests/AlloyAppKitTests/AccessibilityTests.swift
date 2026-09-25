@@ -13,6 +13,9 @@ final class AccessibilityTests: XCTestCase {
 
     private func open(_ string: String) throws {
         try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        // The previous test's window goes here, not in tearDown: XCTest's tearDown isn't main-actor
+        // isolated, and Swift 6.1 won't let it touch the window.
+        window?.orderOut(nil)
         editor = try AlloyEditorView(buffer: TextBuffer(string), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = editor
@@ -20,7 +23,6 @@ final class AccessibilityTests: XCTestCase {
         editor.layout()
     }
 
-    override func tearDown() { window?.orderOut(nil) }
 
     func testIsATextAreaWithTheTextAsItsValue() throws {
         try open("let a = 1\nlet b = 2\n")

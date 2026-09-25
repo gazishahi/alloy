@@ -16,6 +16,9 @@ final class InputTests: XCTestCase {
 
     private func open(_ string: String, width: CGFloat = 600) throws {
         try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        // The previous test's window goes here, not in tearDown: XCTest's tearDown isn't main-actor
+        // isolated, and Swift 6.1 won't let it touch the window.
+        window?.orderOut(nil)
         editor = try AlloyEditorView(buffer: TextBuffer(string), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = editor
@@ -25,7 +28,6 @@ final class InputTests: XCTestCase {
         view.pasteboard = NSPasteboard(name: NSPasteboard.Name("alloy-tests-\(UUID().uuidString)"))
     }
 
-    override func tearDown() { window?.orderOut(nil) }
 
     private func command(_ selector: Selector) { view.doCommand(by: selector) }
     private func type(_ string: String) { for c in string { view.insertText(String(c), replacementRange: NSRange(location: NSNotFound, length: 0)) } }
@@ -191,21 +193,25 @@ final class InputTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(recorder.selectionChanges, 3)
     }
 
-    /// Content insets (the Find bar, Side's floating chrome) move the drawing with the document,
-    /// not on top of it: the text is drawn where the document view is.
-    func testInsetsDontShiftTheDrawing() throws {
+    /// Content insets (the Find bar, Side's floating chrome) don't shift the text, and the text
+    /// goes on under them: the drawing covers the whole clip view, in document coordinates.
+    func testInsetsDontShiftTheDrawingAndTextFlowsUnderThem() throws {
         try open(String(repeating: "line\n", count: 200))
         editor.scrollView.automaticallyAdjustsContentInsets = false
-        editor.scrollView.contentInsets = NSEdgeInsets(top: 32, left: 0, bottom: 0, right: 0)
+        editor.scrollView.contentInsets = NSEdgeInsets(top: 32, left: 0, bottom: 40, right: 0)
         editor.scrollY = 0
         editor.render()
         XCTAssertEqual(editor.scrollY, 0)
-        let documentTop = view.convert(CGPoint(x: 0, y: editor.scrollY), to: editor.scrollView).y
-        XCTAssertEqual(editor.canvasFrame.minY, documentTop, accuracy: 0.5)
-        XCTAssertEqual(editor.canvasFrame.minY, 32, accuracy: 0.5, "below the inset")
+        XCTAssertEqual(editor.canvasFrame, editor.scrollView.contentView.frame, "under the insets too")
+        // The document's top sits 32 points into the drawing, where the document view is.
+        let documentTop = view.convert(CGPoint(x: 0, y: 0), to: editor.scrollView).y
+        XCTAssertEqual(documentTop - editor.canvasFrame.minY, -editor.drawingRect.minY, accuracy: 0.5)
+        XCTAssertEqual(editor.drawingRect.minY, -32, accuracy: 0.5)
         editor.scrollY = 100
         editor.render()
         XCTAssertEqual(editor.scrollY, 100, accuracy: 0.5)
+        XCTAssertEqual(editor.drawingRect.minY, 68, accuracy: 0.5, "the lines above the viewport are drawn, under the top inset")
+        XCTAssertEqual(editor.drawingRect.maxY, editor.viewport.maxY + 40, accuracy: 0.5, "and below it, under the bottom inset")
     }
 
     /// Views added to the text view (Make's proposal cards) sit above the drawing.
