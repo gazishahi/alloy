@@ -101,7 +101,7 @@ final class SyntaxTests: XCTestCase {
             ("swift", root.appendingPathComponent("Sources/AlloyCore/Rope.swift")),
             ("js", checkouts.appendingPathComponent("tree-sitter-javascript/grammar.js")),
             ("py", checkouts.appendingPathComponent("tree-sitter-python/setup.py")),
-            ("md", checkouts.appendingPathComponent("tree-sitter-swift/README.md")),
+            ("md", root.appendingPathComponent("docs/DESIGN.md")),
             ("c", checkouts.appendingPathComponent("tree-sitter-c/src/tree_sitter/parser.h")),
         ]
         // A body big enough (2,000 members) to take the per-child path.
