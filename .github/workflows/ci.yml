@@ -12,17 +12,8 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
-      - name: Crash reports
+      - name: Backtrace of a crashing test
         if: failure()
         run: |
-          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -2); do
-            echo "== $f"; python3 -c "
-          import json,sys
-          lines=open(sys.argv[1]).read().split('\n',1)
-          d=json.loads(lines[1])
-          print(d.get('exception'), d.get('termination',{}).get('indicator'))
-          t=[t for t in d['threads'] if t.get('triggered')][0]
-          imgs=d['usedImages']
-          for fr in t['frames'][:25]:
-              print(imgs[fr['imageIndex']].get('name','?'), fr.get('symbol','?'), fr.get('sourceFile',''), fr.get('sourceLine',''))
-          " "$f"; done
+          bundle=$(find .build -name "AlloyPackageTests.xctest" -maxdepth 3 | head -1)
+          lldb --batch -o "process handle SIGTRAP -s true" -o run -o "bt 30" -- "$(xcrun -f xctest)" -XCTest AlloyAppKitTests.InputTests "$bundle" | tail -60
