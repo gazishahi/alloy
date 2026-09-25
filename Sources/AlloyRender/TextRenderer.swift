@@ -135,6 +135,12 @@ public final class TextRenderer {
     public enum RenderError: Error { case noDevice }
 
     /// Encodes a frame into `target` and commits it; presents `drawable` if given.
+    /// Called on Metal's completion queue: made outside any actor (see `AlloyEditorView`'s
+    /// `recordPresentation`).
+    nonisolated private static func signalWhenDone(_ semaphore: DispatchSemaphore) -> @Sendable (MTLCommandBuffer) -> Void {
+        { _ in semaphore.signal() }
+    }
+
     /// Draw nothing but the background: a control for measurements (a frame's cost without the
     /// text). `ALLOY_CLEAR_ONLY=1` sets it at launch.
     public nonisolated(unsafe) static var clearOnly = ProcessInfo.processInfo.environment["ALLOY_CLEAR_ONLY"] == "1"
@@ -156,7 +162,7 @@ public final class TextRenderer {
         framesInFlight.wait()
         guard let buffer = queue.makeCommandBuffer(), let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { framesInFlight.signal(); return nil }
         let inFlight = framesInFlight
-        buffer.addCompletedHandler { _ in inFlight.signal() }
+        buffer.addCompletedHandler(Self.signalWhenDone(inFlight))
         if !quads.isEmpty {
             var viewport = SIMD2<Float>(Float(target.width), Float(target.height))
             var atlasSize = Float(atlas.size)

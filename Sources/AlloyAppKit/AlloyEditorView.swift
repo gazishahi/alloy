@@ -341,6 +341,13 @@ public final class AlloyEditorView: NSView {
         func take() -> [CFTimeInterval] { lock.lock(); defer { lock.unlock() }; let t = times; times = []; return t }
     }
     private let presented = PresentedTimes()
+
+    /// Metal calls this on its own queue. Made outside the main actor: a closure written inline
+    /// in `render()` is main-actor isolated, and Swift checks that at run time (a trap on the
+    /// completion queue, with Swift 6.1's inference).
+    nonisolated private static func recordPresentation(into times: PresentedTimes) -> @Sendable (MTLDrawable) -> Void {
+        { times.append($0.presentedTime) }
+    }
     public private(set) var displayInterval: CFTimeInterval = 1.0 / 60
 
     /// Frames that missed their vsync since the counters were reset, from presented times, and
@@ -408,7 +415,7 @@ public final class AlloyEditorView: NSView {
             frame.decorations.append(Decoration(range: marked, color: theme.text, style: .underline))
         }
         let presented = self.presented
-        drawable.addPresentedHandler { presented.append($0.presentedTime) }
+        drawable.addPresentedHandler(Self.recordPresentation(into: presented))
         renderer.draw(frame, layout: documentLayout, into: drawable.texture, drawable: drawable)
         framesDrawn += 1
         lastRenderTime = CACurrentMediaTime()
