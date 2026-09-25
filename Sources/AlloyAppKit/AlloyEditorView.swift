@@ -135,8 +135,7 @@ public final class AlloyEditorView: NSView {
     /// Keeps the first caret on screen after a move or an edit.
     func revealCarets() {
         guard let head = buffer.selections.last?.head else { return }
-        let rect = documentLayout.caretRect(at: head).insetBy(dx: -4, dy: 0)
-        if !documentView.visibleRect.contains(rect) { documentView.scrollToVisible(rect) }
+        scrollToVisible(documentLayout.caretRect(at: head), margin: 0)
     }
 
     func focusChanged(_ focused: Bool) {
@@ -312,20 +311,33 @@ public final class AlloyEditorView: NSView {
     }
 
     /// Scrolls so a UTF-16 offset is on screen.
+    /// Scrolls so an offset's line is on screen with a line to spare, and not under anything
+    /// covering the editor (its content insets: a palette, floating chrome). AppKit's
+    /// scroll-to-visible counts what's under an inset as visible.
     public func scrollToVisible(offset: Int) {
-        let rect = documentLayout.caretRect(at: offset).insetBy(dx: 0, dy: -documentLayout.lineHeight)
-        documentView.scrollToVisible(rect)
+        scrollToVisible(documentLayout.caretRect(at: offset), margin: documentLayout.lineHeight)
+    }
+
+    private func scrollToVisible(_ rect: CGRect, margin: CGFloat) {
+        let visible = viewport
+        var y = visible.minY
+        if rect.minY - margin < visible.minY {
+            y = rect.minY - margin
+        } else if rect.maxY + margin > visible.maxY {
+            y = rect.maxY + margin - visible.height
+        }
+        if y != visible.minY { scrollY = y }
         setNeedsRender()
     }
 
-    /// The part of the document on screen and not under an inset (the Find bar, floating
-    /// chrome), in document points: what's drawn. The document view sits at the clip view's
-    /// origin, so clip coordinates are document coordinates.
     /// What's drawn: the whole clip view in document points, its content insets included, so the
     /// text scrolls on under chrome floating over the editor (Make's tab strip and bottom bar)
     /// instead of stopping at its edge. Above the document's top this starts at a negative y.
     var drawingRect: CGRect { scrollView.contentView.bounds }
 
+    /// The part of the document on screen and not under an inset (the Find bar, floating
+    /// chrome), in document points. The document view sits at the clip view's origin, so clip
+    /// coordinates are document coordinates.
     var viewport: CGRect {
         let clip = scrollView.contentView
         let insets = clip.contentInsets

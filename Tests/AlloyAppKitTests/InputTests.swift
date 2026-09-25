@@ -239,3 +239,30 @@ final class InputTests: XCTestCase {
         XCTAssertEqual(visible.location, 0)
     }
 }
+
+@MainActor
+final class RevealTests: XCTestCase {
+    /// A line under the bottom inset (a palette over the editor) isn't "visible": revealing it
+    /// scrolls it above the inset.
+    func testRevealingClearsTheInsets() throws {
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        let editor = try AlloyEditorView(buffer: TextBuffer(String(repeating: "line\n", count: 400)), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = editor
+        window.layoutIfNeeded()
+        editor.layout()
+        editor.scrollView.automaticallyAdjustsContentInsets = false
+        editor.scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 200, right: 0)
+        editor.scrollY = 0
+        let offset = editor.buffer.text.offset(ofLine: 16)
+        let line = editor.documentLayout.caretRect(at: offset)
+        XCTAssertGreaterThan(line.maxY, editor.viewport.maxY, "the line starts out under the inset")
+        editor.scrollToVisible(offset: offset)
+        XCTAssertLessThanOrEqual(line.maxY, editor.viewport.maxY, "and ends up above it")
+        editor.scrollToVisible(offset: offset)
+        let settled = editor.scrollY
+        editor.scrollToVisible(offset: offset)
+        XCTAssertEqual(editor.scrollY, settled, "already visible: no scroll")
+        window.orderOut(nil)
+    }
+}
