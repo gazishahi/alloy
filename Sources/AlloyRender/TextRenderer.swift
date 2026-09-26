@@ -111,28 +111,66 @@ public final class TextRenderer {
     }
 
     public init(device: MTLDevice? = MTLCreateSystemDefaultDevice(), pixelFormat: MTLPixelFormat = .bgra8Unorm) throws {
-        guard let device, let queue = device.makeCommandQueue() else { throw RenderError.noDevice }
+        guard let device else { throw RenderError.noDevice }
+        let shared = try Shared.resources(device: device, pixelFormat: pixelFormat)
         self.device = device
-        self.queue = queue
-        let library = try device.makeLibrary(source: Self.shaders, options: nil)
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "quadVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "quadFragment")
-        let attachment = descriptor.colorAttachments[0]!
-        attachment.pixelFormat = pixelFormat
-        attachment.isBlendingEnabled = true
-        attachment.rgbBlendOperation = .add
-        attachment.alphaBlendOperation = .add
-        attachment.sourceRGBBlendFactor = .one
-        attachment.sourceAlphaBlendFactor = .one
-        attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        let samplerDescriptor = MTLSamplerDescriptor()
-        samplerDescriptor.minFilter = .nearest
-        samplerDescriptor.magFilter = .nearest
-        sampler = device.makeSamplerState(descriptor: samplerDescriptor)!
-        atlas = GlyphAtlas(device: device)
+        self.shared = shared
+        queue = shared.queue
+        pipeline = shared.pipeline
+        sampler = shared.sampler
+        atlas = shared.atlas
+    }
+
+    /// What every renderer on one GPU can share: the command queue, the compiled shaders, the
+    /// sampler, and the glyph atlas (its keys carry the font, size and scale, so editors with
+    /// different fonts share it too). Each editor used to compile the shaders and keep an atlas
+    /// of its own, 4 to 64 MB apiece: a split diff paid twice, Make and Review each again. Held
+    /// while any renderer is: the last one going frees it.
+    private let shared: Shared
+
+    private final class Shared {
+        let queue: MTLCommandQueue
+        let pipeline: MTLRenderPipelineState
+        let sampler: MTLSamplerState
+        let atlas: GlyphAtlas
+
+        private struct Key: Hashable { let device: UInt64; let pixelFormat: UInt }
+        private final class Weak { weak var value: Shared? }
+        @MainActor private static var cache: [Key: Weak] = [:]
+
+        @MainActor static func resources(device: MTLDevice, pixelFormat: MTLPixelFormat) throws -> Shared {
+            let key = Key(device: device.registryID, pixelFormat: pixelFormat.rawValue)
+            if let existing = cache[key]?.value { return existing }
+            let made = try Shared(device: device, pixelFormat: pixelFormat)
+            let box = Weak()
+            box.value = made
+            cache[key] = box
+            return made
+        }
+
+        @MainActor private init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
+            guard let queue = device.makeCommandQueue() else { throw RenderError.noDevice }
+            self.queue = queue
+            let library = try device.makeLibrary(source: TextRenderer.shaders, options: nil)
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.vertexFunction = library.makeFunction(name: "quadVertex")
+            descriptor.fragmentFunction = library.makeFunction(name: "quadFragment")
+            let attachment = descriptor.colorAttachments[0]!
+            attachment.pixelFormat = pixelFormat
+            attachment.isBlendingEnabled = true
+            attachment.rgbBlendOperation = .add
+            attachment.alphaBlendOperation = .add
+            attachment.sourceRGBBlendFactor = .one
+            attachment.sourceAlphaBlendFactor = .one
+            attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            let samplerDescriptor = MTLSamplerDescriptor()
+            samplerDescriptor.minFilter = .nearest
+            samplerDescriptor.magFilter = .nearest
+            sampler = device.makeSamplerState(descriptor: samplerDescriptor)!
+            atlas = GlyphAtlas(device: device)
+        }
     }
 
     public enum RenderError: Error { case noDevice }
@@ -236,6 +274,14 @@ public final class TextRenderer {
             solids.append(Quad(rect: rect(0, caret.minY, viewportWidth, lineHeight), uv: .zero, color: frame.theme.currentLine, kind: 0))
         }
 
+        // Only the decorations on screen, found once a frame: every line used to test every one
+        // (a find with thousands of matches, times each visible line).
+        var onScreen: [Decoration] = []
+        if let first = lines.first, let last = lines.last {
+            let visible = text.offset(ofLine: first.line)..<(text.offset(ofLine: last.line) + last.layout.text.utf16.count)
+            onScreen = frame.decorations.filter { $0.range.lowerBound <= visible.upperBound && $0.range.upperBound >= visible.lowerBound }
+        }
+
         for (line, top, laid) in lines {
             let lineStart = text.offset(ofLine: line)
             let lineRange = lineStart..<(lineStart + laid.text.utf16.count)
@@ -262,7 +308,7 @@ public final class TextRenderer {
             }
 
             // Decorations: a band or a line under each row they touch.
-            for decoration in frame.decorations {
+            for decoration in onScreen {
                 let range = decoration.range
                 guard range.lowerBound <= lineRange.upperBound, range.upperBound >= lineRange.lowerBound, !range.isEmpty else { continue }
                 for (index, row) in laid.rows.enumerated() {

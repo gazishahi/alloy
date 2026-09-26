@@ -520,6 +520,13 @@ public final class AlloyEditorView: NSView {
     }
 
     public var lastFrameStats: FrameStats { renderer.lastStats }
+    /// What its drawables hold, for measurements: window-sized, so it depends on the window,
+    /// not the document.
+    public var drawableMemoryBytes: Int {
+        guard canvasHasDrawn else { return 0 }
+        let size = canvas.metalLayer.drawableSize
+        return Int(size.width * size.height) * 4 * canvas.metalLayer.maximumDrawableCount
+    }
     /// Where the drawing surface sits in the scroll view (tests).
     public var canvasFrame: CGRect { canvas.frame }
 
