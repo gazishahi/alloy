@@ -237,6 +237,9 @@ public final class SyntaxHighlighter {
     }
 
     /// Waits for a background parse to land (tests, and a caller that needs final colors now).
+    /// A copy of the tree (cheap: tree-sitter shares its nodes), safe to walk on another thread.
+    func currentTreeCopy() -> Tree? { tree?.copy() }
+
     public func waitForParse(timeout: TimeInterval = 10) {
         let deadline = Date().addingTimeInterval(timeout)
         while (parseInFlight || needsParse), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }

@@ -4,7 +4,7 @@ Alloy is a GPU text editing engine for macOS, in Swift. It's the editor behind t
 [Side](https://github.com/gazishahi/side-releases): a document model built for big files and for
 agents that edit alongside you, drawn with Metal.
 
-**Status: 0.3.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
+**Status: 0.4.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
 
 ## What's in it
 
@@ -13,7 +13,7 @@ agents that edit alongside you, drawn with Metal.
 | **AlloyCore** | The document: `Rope` (persistent balanced tree, O(log n) lines and offsets, free copies), `TextBuffer` (multiple selections, grouped undo, change events that replay exactly), `RopeString` (an `NSString` view of a rope, no copy), `Folding` (foldable regions from indentation, one pass) | Foundation |
 | **AlloyRender** | Drawing: `DocumentLayout` (CoreText shaping per line, soft wrap), `GlyphAtlas`, `TextRenderer` (Metal, instanced quads, selections, carets, decorations) | AlloyCore, CoreText, Metal |
 | **AlloyAppKit** | The view: `AlloyEditorView` and `AlloyTextView` (`NSTextInputClient`, so IME, dictation and marked text work; key bindings; mouse; pasteboard; `NSTextFinder`; VoiceOver as a text area), `AlloyGutterView` (numbers, marks, fold arrows), `AlloyMinimapView` | AlloyCore, AlloyRender, AppKit |
-| **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
+| **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. `SyntaxSymbolSource`: an outline of declarations from the same tree, walkable off the main thread. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
 
 Editing: multiple cursors (⌥-click, ⌥⌘↑/↓), column selection (⌥-drag), code folding (the gutter,
 or `foldAtCaret`, `unfoldAtCaret`, `foldAll`, `unfoldAll`; a folded region reads as one line, `header { … }`, and
@@ -29,7 +29,7 @@ tree-sitter.
 ## Using it
 
 ```swift
-.package(url: "https://github.com/gazishahi/alloy", from: "0.3.0")
+.package(url: "https://github.com/gazishahi/alloy", from: "0.4.0")
 ```
 
 ```swift
