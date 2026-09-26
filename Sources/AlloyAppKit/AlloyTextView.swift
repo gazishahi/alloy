@@ -39,6 +39,8 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     private var dragAnchor: Selection?
     private var dragGranularity = 1
     private var dragAddsCaret = false
+    /// ⌥-drag: where the rectangle started, and the selections before the press.
+    private var columnStart: CGPoint?
     private var autoscrollTimer: Timer?
     let textFinder = NSTextFinder()
 
@@ -441,8 +443,9 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
             dragAnchor = Selection(caret: first.anchor)
             setSelections([Selection(anchor: first.anchor, head: offset)])
         } else if dragAddsCaret {
-            // ⌥-click: one more caret, and no drag.
+            // ⌥-click: one more caret. Dragging from here selects a rectangle instead.
             dragAnchor = nil
+            columnStart = point
             setSelections(buffer.selections + [Selection(caret: offset)])
         } else {
             dragAnchor = Selection(anchor: range.lowerBound, head: range.upperBound)
@@ -451,6 +454,11 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        if let start = columnStart {
+            setSelections(columnSelections(from: start, to: convert(event.locationInWindow, from: nil)))
+            autoscroll(with: event)
+            return
+        }
         extendDrag(to: convert(event.locationInWindow, from: nil))
         // Past the edge: keep scrolling while the button is held.
         autoscroll(with: event)
@@ -471,6 +479,27 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         autoscrollTimer?.invalidate()
         autoscrollTimer = nil
         dragAnchor = nil
+        columnStart = nil
+    }
+
+    /// A rectangle between two points: on each visual row it crosses, from the left edge's
+    /// column to the right's (a row too short for either gets a caret at its end). The head is on
+    /// the side the drag went, so extending goes on from there.
+    public func columnSelections(from start: CGPoint, to end: CGPoint) -> [Selection] {
+        let top = min(start.y, end.y), bottom = max(start.y, end.y)
+        let height = layout.lineHeight
+        var result: [Selection] = []
+        var y = top
+        var lastRowStart = -1
+        while y <= bottom + 0.5 {
+            let anchor = layout.offset(at: CGPoint(x: start.x, y: y))
+            let head = layout.offset(at: CGPoint(x: end.x, y: y))
+            let rowStart = layout.offset(at: CGPoint(x: 0, y: y))
+            if rowStart != lastRowStart { result.append(Selection(anchor: anchor, head: head)) }
+            lastRowStart = rowStart
+            y += height
+        }
+        return result.isEmpty ? [Selection(caret: layout.offset(at: end))] : result
     }
 
     private func extendDrag(to point: CGPoint) {

@@ -4,16 +4,20 @@ Alloy is a GPU text editing engine for macOS, in Swift. It's the editor behind t
 [Side](https://github.com/gazishahi/side-releases): a document model built for big files and for
 agents that edit alongside you, drawn with Metal.
 
-**Status: 0.1.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
+**Status: 0.2.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
 
 ## What's in it
 
 | Library | What it is | Depends on |
 |---|---|---|
-| **AlloyCore** | The document: `Rope` (persistent balanced tree, O(log n) lines and offsets, free copies), `TextBuffer` (multiple selections, grouped undo, change events that replay exactly), `RopeString` (an `NSString` view of a rope, no copy) | Foundation |
+| **AlloyCore** | The document: `Rope` (persistent balanced tree, O(log n) lines and offsets, free copies), `TextBuffer` (multiple selections, grouped undo, change events that replay exactly), `RopeString` (an `NSString` view of a rope, no copy), `Folding` (foldable regions from indentation, one pass) | Foundation |
 | **AlloyRender** | Drawing: `DocumentLayout` (CoreText shaping per line, soft wrap), `GlyphAtlas`, `TextRenderer` (Metal, instanced quads, selections, carets, decorations) | AlloyCore, CoreText, Metal |
-| **AlloyAppKit** | The view: `AlloyEditorView` and `AlloyTextView` (`NSTextInputClient`, so IME, dictation and marked text work; key bindings; mouse; pasteboard; `NSTextFinder`; VoiceOver as a text area), `AlloyGutterView` | AlloyCore, AlloyRender, AppKit |
+| **AlloyAppKit** | The view: `AlloyEditorView` and `AlloyTextView` (`NSTextInputClient`, so IME, dictation and marked text work; key bindings; mouse; pasteboard; `NSTextFinder`; VoiceOver as a text area), `AlloyGutterView` (numbers, marks, fold arrows), `AlloyMinimapView` | AlloyCore, AlloyRender, AppKit |
 | **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
+
+Editing: multiple cursors (⌥-click, ⌥⌘↑/↓), column selection (⌥-drag), code folding (the gutter,
+or `foldAtCaret`, `unfoldAtCaret`, `foldAll`, `unfoldAll`; folded lines take no space, and a
+selection that lands inside opens them), and a minimap (`editor.minimap`, placed by the owner).
 
 Offsets are UTF-16 throughout, the unit AppKit and LSP use; UTF-8 conversions are there for
 tree-sitter.
@@ -21,7 +25,7 @@ tree-sitter.
 ## Using it
 
 ```swift
-.package(url: "https://github.com/gazishahi/alloy", from: "0.1.0")
+.package(url: "https://github.com/gazishahi/alloy", from: "0.2.0")
 ```
 
 ```swift
@@ -52,6 +56,9 @@ Measured in Side on a MacBook Pro (Apple silicon, 120 Hz), optimized builds:
 | Re-color an edited line, p99 | ≤ 2 ms | 0.2 ms |
 | Memory for a 20 MB file | ≤ 3× the file | ~1.2–1.6× |
 | Scrolling at 120 Hz | no dropped frames | as few as a control that draws nothing |
+| Foldable regions, 100,000-line file (off the main thread) | ≤ 500 ms | ~30 ms |
+| Fold everything, 100,000-line file | ≤ 50 ms | ~8 ms |
+| The minimap, a frame while scrolling, p99 | ≤ 4 ms | ~2.5 ms |
 
 How they're met, and the decisions behind the design, are in [docs/DESIGN.md](docs/DESIGN.md).
 

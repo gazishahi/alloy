@@ -21,16 +21,26 @@ public final class AlloyEditorView: NSView {
     public var styles: ((Int) -> [StyleSpan])? { didSet { setNeedsRender() } }
     /// A tint across a line, edge to edge; asked only for lines on screen.
     public var lineBackground: ((Int) -> SIMD4<Float>?)? { didSet { setNeedsRender() } }
+    /// Code folding: regions found from indentation, shown in the gutter. Off for a view that
+    /// shouldn't fold (a diff).
+    public var isFoldingEnabled = true { didSet { isFoldingEnabled ? scheduleFoldRegions() : clearFolds() } }
+    /// The document's foldable regions, `header...last` (folding hides `header + 1 ... last`).
+    public internal(set) var foldRegions: [ClosedRange<Int>] = []
+    var foldRegionsGeneration = 0
+    /// The band behind a folded region's first line.
+    public var foldedLineColor: SIMD4<Float> = [0.5, 0.5, 0.5, 0.12] { didSet { setNeedsRender() } }
     /// Wrap to the view's width (Make's default), or not.
     public var wrapsLines = true { didSet { updateWrapWidth() } }
     public weak var delegate: AlloyEditorDelegate?
     /// Marks to draw (diagnostics, a matched bracket).
-    public var decorations: [Decoration] = [] { didSet { setNeedsRender() } }
+    public var decorations: [Decoration] = [] { didSet { setNeedsRender(); minimap.needsDisplay = true } }
     /// The view that takes focus, reports its geometry in document points, and hosts overlays
     /// that scroll with the text.
     public var textView: AlloyTextView { documentView }
     /// Line numbers and marks; the owner places it beside the editor.
     public let gutter = AlloyGutterView()
+    /// The document drawn small; its owner places it (beside the editor) and shows it or not.
+    public let minimap = AlloyMinimapView()
     /// False: the text can be read and selected but not changed.
     public var isEditable = true
     /// After an undo (false) or redo (true) through the Edit menu or ⌘Z.
@@ -52,7 +62,7 @@ public final class AlloyEditorView: NSView {
         return text
     }
 
-    private let documentView = AlloyTextView()
+    let documentView = AlloyTextView()
     /// The text view is first responder.
     private var hasFocus = false
     /// The caret shows (and blinks) only while this editor has focus in the key window of the
@@ -85,6 +95,7 @@ public final class AlloyEditorView: NSView {
         super.init(frame: .zero)
         documentView.editor = self
         gutter.editor = self
+        minimap.editor = self
         canvas.metalLayer.device = renderer.device
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
@@ -119,6 +130,7 @@ public final class AlloyEditorView: NSView {
         documentLayout.reset(buffer.text)
         updateDocumentHeight()
         setNeedsRender()
+        scheduleFoldRegions()
     }
 
     /// Every change to the buffer, as it happens (syntax highlighting follows these).
@@ -128,10 +140,12 @@ public final class AlloyEditorView: NSView {
         textGeneration += 1
         onTextChange?(change)
         documentLayout.update(buffer.text, edits: change.edits)
+        scheduleFoldRegions()
         updateDocumentHeight()
         restartBlink()
         setNeedsRender()
         gutter.needsDisplay = true
+        minimap.needsDisplay = true
         documentView.postAccessibilityChange(value: true)
         // A replacement is the owner's own doing, not an edit to report back to it.
         guard change.reason != .replace else { return }
@@ -146,6 +160,7 @@ public final class AlloyEditorView: NSView {
     }
 
     func selectionChanged() {
+        revealFoldedSelections()
         restartBlink()
         setNeedsRender()
         documentView.postAccessibilityChange(value: false)
@@ -311,7 +326,7 @@ public final class AlloyEditorView: NSView {
         documentLayout.setWrapWidth(wrapsLines && width > 0 ? width : nil)
     }
 
-    private func updateDocumentHeight() {
+    func updateDocumentHeight() {
         let insets = scrollView.contentView.contentInsets
         let height = max(documentLayout.contentHeight, scrollView.contentView.bounds.height - insets.top - insets.bottom)
         let width = scrollView.contentView.bounds.width
@@ -323,6 +338,7 @@ public final class AlloyEditorView: NSView {
     @objc private func scrolled() {
         setNeedsRender()
         gutter.needsDisplay = true
+        if !minimap.isHiddenOrHasHiddenAncestor { minimap.needsDisplay = true }
     }
 
     /// Selects, as the user would (the delegate hears about it); doesn't scroll.
@@ -335,6 +351,7 @@ public final class AlloyEditorView: NSView {
     public func reloadText() {
         textGeneration += 1
         documentLayout.reset(buffer.text)
+        scheduleFoldRegions()
         updateDocumentHeight()
         gutter.needsDisplay = true
         setNeedsRender()
@@ -504,7 +521,7 @@ public final class AlloyEditorView: NSView {
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
         frame.decorations = decorations
-        frame.lineBackground = lineBackground
+        frame.lineBackground = foldAwareLineBackground
         if let marked = documentView.composingRange {
             frame.decorations.append(Decoration(range: marked, color: theme.text, style: .underline))
         }

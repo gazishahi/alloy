@@ -18,7 +18,8 @@ public struct GutterMark: Equatable {
 /// as people (and Make's diff and diagnostics code) count them.
 @MainActor
 public final class AlloyGutterView: NSView {
-    public static let width: CGFloat = 44
+    /// Room for five-digit numbers beside the fold column.
+    public static let width: CGFloat = 54
     weak var editor: AlloyEditorView?
     public var font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular) { didSet { numbers.removeAll(); labels.removeAll(); needsDisplay = true } }
     public var numberColor = NSColor.tertiaryLabelColor { didSet { needsDisplay = true } }
@@ -33,6 +34,41 @@ public final class AlloyGutterView: NSView {
     private var labels: [String: (line: CTLine, width: CGFloat)] = [:]
 
     public override var isFlipped: Bool { true }
+
+    /// Room at the right edge for the fold arrows, when the editor folds.
+    static let foldColumn: CGFloat = 14
+    private var showsFoldColumn: Bool { editor?.isFoldingEnabled == true && label == nil }
+    /// Open regions' arrows show while the pointer is over the gutter; folded ones always.
+    private var isPointerInside = false { didSet { if isPointerInside != oldValue { needsDisplay = true } } }
+
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    public override func mouseEntered(with event: NSEvent) { isPointerInside = true }
+    public override func mouseExited(with event: NSEvent) { isPointerInside = false }
+
+    private func drawFoldArrow(folded: Bool, rowTop: CGFloat, lineHeight: CGFloat) {
+        let size: CGFloat = 4
+        let centerX = bounds.width - Self.foldColumn / 2 - 1
+        let centerY = rowTop + lineHeight / 2
+        let path = NSBezierPath()
+        if folded {
+            path.move(to: NSPoint(x: centerX - size / 2, y: centerY - size))
+            path.line(to: NSPoint(x: centerX + size / 2, y: centerY))
+            path.line(to: NSPoint(x: centerX - size / 2, y: centerY + size))
+        } else {
+            path.move(to: NSPoint(x: centerX - size, y: centerY - size / 2))
+            path.line(to: NSPoint(x: centerX, y: centerY + size / 2))
+            path.line(to: NSPoint(x: centerX + size, y: centerY - size / 2))
+        }
+        path.lineWidth = 1.5
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        (folded ? NSColor.secondaryLabelColor : numberColor).setStroke()
+        path.stroke()
+    }
 
     /// Each line number, shaped once: drawing them as strings (measure, then draw) cost ~1.5 ms
     /// a frame while scrolling, more than the text itself.
@@ -85,8 +121,13 @@ public final class AlloyGutterView: NSView {
                 }
             } else {
                 let (shaped, width) = number(line + 1)
-                context.textPosition = CGPoint(x: bounds.width - width - 8, y: rowTop + layout.ascent)
+                let right = showsFoldColumn ? Self.foldColumn + 2 : 8
+                context.textPosition = CGPoint(x: bounds.width - width - right, y: rowTop + layout.ascent)
                 CTLineDraw(shaped, context)
+            }
+            if showsFoldColumn, editor.foldRegion(headedBy: line) != nil {
+                let folded = editor.isFolded(line: line)
+                if folded || isPointerInside { drawFoldArrow(folded: folded, rowTop: rowTop, lineHeight: lineHeight) }
             }
             for mark in marks[line + 1] ?? [] {
                 mark.color.setFill()
@@ -112,7 +153,14 @@ public final class AlloyGutterView: NSView {
     }
 
     public override func mouseDown(with event: NSEvent) {
-        guard let line = line(at: convert(event.locationInWindow, from: nil)), marks[line] != nil else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let line = line(at: point) else { return }
+        // The fold column, on a line that heads a region: fold or unfold it.
+        if showsFoldColumn, point.x >= bounds.width - Self.foldColumn - 4, let editor, editor.foldRegion(headedBy: line - 1) != nil {
+            editor.toggleFold(line: line - 1)
+            return
+        }
+        guard marks[line] != nil else { return }
         onClick?(line, event)
     }
 }

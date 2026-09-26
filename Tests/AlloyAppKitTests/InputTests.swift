@@ -117,6 +117,31 @@ final class InputTests: XCTestCase {
         XCTAssertEqual(editor.buffer.selections.count, 1, "Escape: back to one caret")
     }
 
+    func testOptionDragSelectsAColumn() throws {
+        try open("alpha one\nb\ngamma two\ndelta three")
+        func point(_ offset: Int) -> CGPoint {
+            let caret = editor.documentLayout.caretRect(at: offset)
+            return view.convert(CGPoint(x: caret.minX + 1, y: caret.midY), to: nil)
+        }
+        func mouse(_ type: NSEvent.EventType, at location: CGPoint) {
+            let event = NSEvent.mouseEvent(with: type, location: location, modifierFlags: .option, timestamp: 0, windowNumber: window.windowNumber,
+                                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            switch type {
+            case .leftMouseDown: view.mouseDown(with: event)
+            case .leftMouseDragged: view.mouseDragged(with: event)
+            default: view.mouseUp(with: event)
+            }
+        }
+        // From column 1 of the first line to column 4 of the fourth.
+        mouse(.leftMouseDown, at: point(1))
+        mouse(.leftMouseDragged, at: point(22 + 4))
+        mouse(.leftMouseUp, at: point(22 + 4))
+        XCTAssertEqual(editor.buffer.selections.map(\.range), [1..<4, 11..<11, 13..<16, 23..<26],
+                       "one per line; the short line gets a caret at its end")
+        type("X")
+        XCTAssertEqual(text, "aXa one\nbX\ngXa two\ndXa three", "each line's part replaced at once")
+    }
+
     func testClicksDoubleClicksAndShiftClicks() throws {
         try open("alpha beta_gamma delta\nsecond")
         func click(_ offset: Int, count: Int = 1, flags: NSEvent.ModifierFlags = []) {

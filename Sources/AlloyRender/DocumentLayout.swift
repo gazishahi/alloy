@@ -131,6 +131,9 @@ public final class DocumentLayout {
     public private(set) var wrapWidth: CGFloat?
 
     private var rowIndex: RowIndex
+    /// Folded regions' hidden lines, sorted and apart: each takes no rows, so it takes no space
+    /// and nothing draws it. A fold's first line isn't in its range; it stays.
+    public private(set) var hiddenLines: [ClosedRange<Int>] = []
     private var cache: [String: LaidOutLine] = [:]
     private var cacheOrder: [String] = []
     static let cacheLimit = 1_000
@@ -159,15 +162,62 @@ public final class DocumentLayout {
             for unit in edit.newText.utf16 where unit == 0x0A { newLines += 1 }
             rowIndex.replaceLines(start: firstLine, oldCount: lastLine - firstLine + 1, newCount: newLines + 1)
             working.replace(edit.range, with: edit.newText)
+            // A fold the edit touches (its lines, or the line it hangs from) opens; those after
+            // it move with the lines.
+            let delta = newLines - (lastLine - firstLine)
+            hiddenLines = hiddenLines.compactMap { range in
+                if range.upperBound < firstLine - 1 { return range }
+                if range.lowerBound - 1 > lastLine { return (range.lowerBound + delta)...(range.upperBound + delta) }
+                return nil
+            }
         }
         text = newText
         if rowIndex.lineCount != text.lineCount { rowIndex = RowIndex(lineCount: text.lineCount) }
+        hideFoldedRows()
     }
+
+    /// Folds: the lines to hide, as ranges (merged, clipped to the document). Lines that were
+    /// hidden and aren't now count as one row until they're drawn again.
+    public func setHiddenLines(_ ranges: [ClosedRange<Int>]) {
+        let last = max(0, text.lineCount - 1)
+        var merged: [ClosedRange<Int>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) where range.lowerBound <= last {
+            let clipped = max(0, range.lowerBound)...min(last, range.upperBound)
+            if let previous = merged.last, clipped.lowerBound <= previous.upperBound + 1 {
+                merged[merged.count - 1] = previous.lowerBound...max(previous.upperBound, clipped.upperBound)
+            } else {
+                merged.append(clipped)
+            }
+        }
+        for range in hiddenLines { for line in range where !Self.contains(merged, line) { rowIndex.set(line: line, rows: 1) } }
+        hiddenLines = merged
+        hideFoldedRows()
+    }
+
+    private func hideFoldedRows() {
+        for range in hiddenLines { for line in range { rowIndex.set(line: line, rows: 0) } }
+    }
+
+    /// The hidden range a line is in, if any (binary search).
+    public func hiddenRange(containing line: Int) -> ClosedRange<Int>? {
+        var low = 0, high = hiddenLines.count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let range = hiddenLines[mid]
+            if line < range.lowerBound { high = mid - 1 } else if line > range.upperBound { low = mid + 1 } else { return range }
+        }
+        return nil
+    }
+
+    public func isHidden(line: Int) -> Bool { hiddenRange(containing: line) != nil }
+
+    private static func contains(_ ranges: [ClosedRange<Int>], _ line: Int) -> Bool { ranges.contains { $0.contains(line) } }
 
     /// Replaces the text wholesale (a document swap).
     public func reset(_ newText: Rope) {
         text = newText
         rowIndex = RowIndex(lineCount: text.lineCount)
+        hiddenLines = []
     }
 
     public func setWrapWidth(_ width: CGFloat?) {
@@ -177,6 +227,7 @@ public final class DocumentLayout {
         cache.removeAll()
         cacheOrder.removeAll()
         rowIndex = RowIndex(lineCount: text.lineCount)
+        hideFoldedRows()
     }
 
     public var lineCount: Int { text.lineCount }
@@ -198,7 +249,7 @@ public final class DocumentLayout {
                 cacheOrder.removeFirst(evicted.count)
             }
         }
-        rowIndex.set(line: line, rows: laid.rows.count)
+        rowIndex.set(line: line, rows: isHidden(line: line) ? 0 : laid.rows.count)
         return laid
     }
 
@@ -220,6 +271,8 @@ public final class DocumentLayout {
         var result: [(Int, CGFloat, LaidOutLine)] = []
         var line = line(atY: top).line
         while line < lineCount {
+            // A folded region is skipped whole, however long.
+            if let hidden = hiddenRange(containing: line) { line = hidden.upperBound + 1; continue }
             let laid = layout(line: line)
             let y = y(ofLine: line)
             if y > bottom { break }
