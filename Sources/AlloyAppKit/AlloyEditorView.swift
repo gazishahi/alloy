@@ -44,6 +44,15 @@ public final class AlloyEditorView: NSView {
     public var onPointerMove: ((_ offset: Int?, _ modifiers: NSEvent.ModifierFlags) -> Void)?
     /// The pointer left the text, or the text moved under it (a scroll).
     public var onPointerExit: (() -> Void)?
+    /// The language's line comment (`//`, `#`, `--`) for Toggle Comment; nil where there's none.
+    public var lineComment: String?
+    /// One level of indentation for Indent and Outdent: the file's (tabs, two or four spaces).
+    public var indentUnit = "    "
+    /// Expand Selection: the smallest range (a syntax node) strictly containing this one.
+    public var onExpandSelection: ((Range<Int>) -> Range<Int>?)?
+    /// What Expand Selection grew from, for Shrink; forgotten when the selection moves otherwise.
+    var selectionHistory: [[Selection]] = []
+    var isExpandingSelection = false
     /// ⌘-click on a character; true if the owner took it (go to definition), so it doesn't
     /// also place the caret.
     public var onCommandClick: ((Int) -> Bool)?
@@ -194,6 +203,7 @@ public final class AlloyEditorView: NSView {
     }
 
     func selectionChanged() {
+        if isExpandingSelection { isExpandingSelection = false } else { selectionHistory.removeAll() }
         snippetCheckSelection()
         revealFoldedSelections()
         restartBlink()

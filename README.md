@@ -4,7 +4,7 @@ Alloy is a GPU text editing engine for macOS, in Swift. It's the editor behind t
 [Side](https://github.com/gazishahi/side-releases): a document model built for big files and for
 agents that edit alongside you, drawn with Metal.
 
-**Status: 0.5.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
+**Status: 0.6.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
 
 ## What's in it
 
@@ -21,6 +21,9 @@ clicking the `… }` opens it; a selection that lands inside opens it too; each 
 its folds when the editor switches between them), snippets (`insert(_:replacing:)` with a `Snippet`
 parsed from LSP/VS Code syntax: Tab and ⇧Tab move between stops, mirrors are typed once),
 pointer hooks for hover cards and ⌘-click (`onPointerMove`, `onPointerExit`, `onCommandClick`),
+the editing commands a keymap binds (`toggleLineComment`, `moveLinesUp`/`Down`, `duplicateLines`,
+`deleteLines`, `indentLines`/`outdentLines`, `joinLines`, `selectNextOccurrence`, `selectAllOccurrences`,
+`expandSelection`/`shrinkSelection` with `onExpandSelection`, `goToMatchingBracket`),
 and a minimap (`editor.minimap`, placed by the owner).
 
 Offsets are UTF-16 throughout, the unit AppKit and LSP use; UTF-8 conversions are there for
@@ -29,7 +32,7 @@ tree-sitter.
 ## Using it
 
 ```swift
-.package(url: "https://github.com/gazishahi/alloy", from: "0.5.0")
+.package(url: "https://github.com/gazishahi/alloy", from: "0.6.0")
 ```
 
 ```swift

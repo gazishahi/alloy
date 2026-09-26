@@ -239,6 +239,21 @@ public final class SyntaxHighlighter {
     }
 
     /// Waits for a background parse to land (tests, and a caller that needs final colors now).
+    /// Expand Selection: the smallest syntax node strictly containing `range` (UTF-16), or its
+    /// whole line's content before a node when the range is inside a comment or string's text.
+    public func enclosingRange(of range: Range<Int>) -> Range<Int>? {
+        guard isReady, let tree, let root = tree.rootNode else { return nil }
+        let bytes = UInt32(range.lowerBound * 2)..<UInt32(max(range.upperBound, range.lowerBound + 1) * 2)
+        var node = root.descendant(in: bytes)
+        while let current = node {
+            let r = current.range
+            let found = r.location..<(r.location + r.length)
+            if found.lowerBound <= range.lowerBound, found.upperBound >= range.upperBound, found != range, !found.isEmpty { return found }
+            node = current.parent
+        }
+        return nil
+    }
+
     /// A copy of the tree (cheap: tree-sitter shares its nodes), safe to walk on another thread.
     func currentTreeCopy() -> Tree? { tree?.copy() }
 
