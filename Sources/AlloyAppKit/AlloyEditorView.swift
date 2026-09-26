@@ -36,6 +36,17 @@ public final class AlloyEditorView: NSView {
     public weak var delegate: AlloyEditorDelegate?
     /// Marks to draw (diagnostics, a matched bracket).
     public var decorations: [Decoration] = [] { didSet { setNeedsRender(); minimap.needsDisplay = true } }
+    /// A snippet's stops while Tab moves through them (`AlloyEditorView+Snippets`).
+    var snippetStops: SnippetStops? { didSet { setNeedsRender() } }
+    var isMovingBetweenStops = false
+    /// The pointer over the text: the character under it (nil past a line's end or off the
+    /// text) and the keys held. For hover cards and ⌘'s link underline.
+    public var onPointerMove: ((_ offset: Int?, _ modifiers: NSEvent.ModifierFlags) -> Void)?
+    /// The pointer left the text, or the text moved under it (a scroll).
+    public var onPointerExit: (() -> Void)?
+    /// ⌘-click on a character; true if the owner took it (go to definition), so it doesn't
+    /// also place the caret.
+    public var onCommandClick: ((Int) -> Bool)?
     /// The view that takes focus, reports its geometry in document points, and hosts overlays
     /// that scroll with the text.
     public var textView: AlloyTextView { documentView }
@@ -123,8 +134,26 @@ public final class AlloyEditorView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// The character under a point in the text view (its coordinates), or nil past a line's end,
+    /// on a line break, or off the text.
+    public func characterOffset(at point: CGPoint) -> Int? {
+        let layout = documentLayout
+        guard point.y >= 0, point.y < layout.contentHeight else { return nil }
+        let offset = layout.offset(at: point)
+        let length = buffer.text.utf16Count
+        for candidate in [offset, offset - 1] where candidate >= 0 && candidate < length {
+            let unit = buffer.text.substring(candidate..<(candidate + 1)).utf16.first
+            if unit == 0x0A { continue }
+            let start = layout.caretRect(at: candidate), end = layout.caretRect(at: candidate + 1)
+            guard start.minY == end.minY, point.y >= start.minY, point.y < start.maxY else { continue }
+            if point.x >= start.minX, point.x < end.minX { return candidate }
+        }
+        return nil
+    }
+
     /// Shows another buffer (a tab switch).
     public func setBuffer(_ buffer: TextBuffer) {
+        endSnippet()
         textGeneration += 1
         rememberFolds()
         self.buffer.onChange = nil
@@ -143,6 +172,7 @@ public final class AlloyEditorView: NSView {
     private func textChanged(_ change: TextChange) {
         textGeneration += 1
         onTextChange?(change)
+        snippetFollow(change)
         documentLayout.update(buffer.text, edits: change.edits)
         scheduleFoldRegions()
         updateDocumentHeight()
@@ -164,6 +194,7 @@ public final class AlloyEditorView: NSView {
     }
 
     func selectionChanged() {
+        snippetCheckSelection()
         revealFoldedSelections()
         restartBlink()
         setNeedsRender()
@@ -340,6 +371,7 @@ public final class AlloyEditorView: NSView {
     }
 
     @objc private func scrolled() {
+        onPointerExit?()
         setNeedsRender()
         gutter.needsDisplay = true
         if !minimap.isHiddenOrHasHiddenAncestor { minimap.needsDisplay = true }
@@ -524,7 +556,7 @@ public final class AlloyEditorView: NSView {
         drawableWaitMilliseconds.append((CACurrentMediaTime() - waitStart) * 1000)
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
-        frame.decorations = decorations
+        frame.decorations = decorations + snippetDecorations
         frame.lineBackground = lineBackground
         frame.lineSuffixes = foldSuffixes
         if let marked = documentView.composingRange {

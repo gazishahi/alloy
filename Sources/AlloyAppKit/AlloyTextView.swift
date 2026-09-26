@@ -261,8 +261,11 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
 
     @objc public override func insertNewline(_ sender: Any?) { insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0)) }
     @objc public override func insertLineBreak(_ sender: Any?) { insertNewline(sender) }
-    @objc public override func insertTab(_ sender: Any?) { insertText("\t", replacementRange: NSRange(location: NSNotFound, length: 0)) }
-    @objc public override func insertBacktab(_ sender: Any?) {}
+    @objc public override func insertTab(_ sender: Any?) {
+        if editor?.moveToSnippetStop(1) == true { return }
+        insertText("\t", replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+    @objc public override func insertBacktab(_ sender: Any?) { editor?.moveToSnippetStop(-1) }
 
     @objc public override func selectAll(_ sender: Any?) { setSelections([Selection(anchor: 0, head: buffer.text.utf16Count)]) }
     @objc public override func selectLine(_ sender: Any?) {
@@ -274,6 +277,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
 
     /// Escape: back to one caret (the first), as in every multi-cursor editor.
     @objc public override func cancelOperation(_ sender: Any?) {
+        if editor?.isInSnippet == true { editor?.endSnippet(); return }
         if buffer.selections.count > 1 { setSelections([Selection(caret: buffer.selections[0].head)]) }
     }
 
@@ -436,6 +440,9 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         let point = convert(event.locationInWindow, from: nil)
         // A folded line's "… }": opens the fold.
         if event.clickCount == 1, editor?.unfoldIfClickedPlaceholder(at: point) == true { return }
+        // ⌘-click: the owner's (go to definition), if it wants it.
+        if event.clickCount == 1, event.modifierFlags.intersection([.command, .option, .shift, .control]) == .command,
+           let editor, let offset = editor.characterOffset(at: point), editor.onCommandClick?(offset) == true { return }
         let offset = layout.offset(at: point)
         dragGranularity = event.clickCount
         dragAddsCaret = event.modifierFlags.contains(.option) && event.clickCount == 1
@@ -475,6 +482,43 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
                 }
             }
         }
+    }
+
+    // MARK: Pointer (hover cards, ⌘'s underline)
+
+    private var pointerTracking: NSTrackingArea?
+
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTracking { removeTrackingArea(pointerTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        pointerTracking = area
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        reportPointer(at: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        editor?.onPointerExit?()
+    }
+
+    /// ⌘ pressed or let go with the pointer still: reported as a move, so the owner can show
+    /// or clear what ⌘ means there.
+    public override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        guard let window else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard visibleRect.contains(point) else { return }
+        reportPointer(at: point, modifiers: event.modifierFlags)
+    }
+
+    private func reportPointer(at point: CGPoint, modifiers: NSEvent.ModifierFlags) {
+        guard let editor, editor.onPointerMove != nil else { return }
+        editor.onPointerMove?(editor.characterOffset(at: point), modifiers)
     }
 
     public override func mouseUp(with event: NSEvent) {
