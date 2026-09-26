@@ -3,9 +3,10 @@ import AlloyRender
 import AppKit
 
 /// A mark in the gutter beside a line: a change bar (added, modified), a notch between lines
-/// (removed), or a dot (a diagnostic).
+/// (removed), a dot (a diagnostic), or a breakpoint: a tag behind the line number, hollow when
+/// the debugger couldn't place it, faint when it's disabled.
 public struct GutterMark: Equatable {
-    public enum Style: Equatable { case bar, notch, dot }
+    public enum Style: Equatable { case bar, notch, dot, breakpoint(enabled: Bool, verified: Bool) }
     public var style: Style
     public var color: NSColor
     public init(style: Style, color: NSColor) {
@@ -26,8 +27,13 @@ public final class AlloyGutterView: NSView {
     public var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
     /// Marks by one-based line.
     public var marks: [Int: [GutterMark]] = [:] { didSet { needsDisplay = true } }
-    /// A click on a line (one-based) that has marks.
+    /// A click on a line (one-based) that has marks, left of the numbers (a change bar, a dot).
     public var onClick: ((Int, NSEvent) -> Void)?
+    /// A click on a line's number (one-based): where a breakpoint is set, as in Xcode. A
+    /// right-click (or ⌃-click) comes here too; `event.type` tells them apart.
+    public var onNumberClick: ((Int, NSEvent) -> Void)?
+    /// Where the numbers start: left of this is the marks' column.
+    static let marksColumn: CGFloat = 15
     /// What the gutter shows for a line (zero-based) in place of its number; nil shows nothing
     /// (a diff's old and new numbers, blank beside a file's header).
     public var label: ((Int) -> String?)? { didSet { labels.removeAll(); needsDisplay = true } }
@@ -122,8 +128,18 @@ public final class AlloyGutterView: NSView {
             } else {
                 let (shaped, width) = number(line + 1)
                 let right = showsFoldColumn ? Self.foldColumn + 2 : 8
+                // A breakpoint's tag goes behind the number, which reads white on it.
+                if let breakpoint = (marks[line + 1] ?? []).first(where: { if case .breakpoint = $0.style { return true } else { return false } }),
+                   case .breakpoint(let enabled, let verified) = breakpoint.style {
+                    let tag = NSRect(x: Self.marksColumn, y: rowTop + 1, width: bounds.width - right + 4 - Self.marksColumn, height: lineHeight - 2)
+                    let path = Self.tagPath(tag)
+                    let color = enabled ? breakpoint.color : breakpoint.color.withAlphaComponent(0.35)
+                    if verified { color.setFill(); path.fill() } else { color.setStroke(); path.lineWidth = 1.5; path.stroke() }
+                    context.setFillColor(verified ? NSColor.white.cgColor : numberColor.cgColor)
+                }
                 context.textPosition = CGPoint(x: bounds.width - width - right, y: rowTop + layout.ascent)
                 CTLineDraw(shaped, context)
+                context.setFillColor(numberColor.cgColor)
             }
             if showsFoldColumn, editor.foldRegion(headedBy: line) != nil {
                 let folded = editor.isFolded(line: line)
@@ -137,11 +153,30 @@ public final class AlloyGutterView: NSView {
                 case .dot:
                     let size: CGFloat = 6
                     NSBezierPath(ovalIn: NSRect(x: 7, y: rowTop + (lineHeight - size) / 2, width: size, height: size)).fill()
+                case .breakpoint:
+                    break   // drawn with the number
                 }
             }
             context.setFillColor(numberColor.cgColor)
         }
         context.restoreGState()
+    }
+
+    /// Xcode's breakpoint shape: a rounded rectangle whose right end points at the text.
+    static func tagPath(_ rect: NSRect) -> NSBezierPath {
+        let point = min(6, rect.height / 2)
+        let radius: CGFloat = 2.5
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: rect.minX + radius, y: rect.minY))
+        path.line(to: NSPoint(x: rect.maxX - point, y: rect.minY))
+        path.line(to: NSPoint(x: rect.maxX, y: rect.midY))
+        path.line(to: NSPoint(x: rect.maxX - point, y: rect.maxY))
+        path.line(to: NSPoint(x: rect.minX + radius, y: rect.maxY))
+        path.appendArc(withCenter: NSPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius, startAngle: 90, endAngle: 180)
+        path.line(to: NSPoint(x: rect.minX, y: rect.minY + radius))
+        path.appendArc(withCenter: NSPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius, startAngle: 180, endAngle: 270)
+        path.close()
+        return path
     }
 
     /// The one-based line under a point in the gutter.
@@ -160,7 +195,18 @@ public final class AlloyGutterView: NSView {
             editor.toggleFold(line: line - 1)
             return
         }
+        // On the numbers: the owner's (a breakpoint). Left of them: the marks' own click.
+        if point.x >= Self.marksColumn, let onNumberClick {
+            onNumberClick(line, event)
+            return
+        }
         guard marks[line] != nil else { return }
         onClick?(line, event)
+    }
+
+    public override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let onNumberClick, let line = line(at: point) else { return super.rightMouseDown(with: event) }
+        onNumberClick(line, event)
     }
 }

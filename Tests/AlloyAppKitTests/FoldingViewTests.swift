@@ -122,4 +122,36 @@ final class FoldingViewTests: XCTestCase {
         let top = editor.documentLayout.line(atY: editor.viewport.minY).line
         XCTAssertLessThan(top, 1000 - shown + 10, "scrolled up to the clicked stretch")
     }
+
+    /// A click on a line's number goes to its owner (a breakpoint); left of the numbers, to the
+    /// marks; a right-click on a number, to its owner too.
+    func testGutterClicksGoWhereTheyLand() throws {
+        try open()
+        let gutter = editor.gutter
+        var numbers: [(Int, NSEvent.EventType)] = []
+        var marks: [Int] = []
+        gutter.onNumberClick = { numbers.append(($0, $1.type)) }
+        gutter.onClick = { line, _ in marks.append(line) }
+        gutter.marks = [3: [GutterMark(style: .dot, color: .red)]]
+        let layout = editor.documentLayout
+        func event(_ type: NSEvent.EventType, x: CGFloat, line: Int) -> NSEvent {
+            // `line(at:)` in reverse: the line's middle, in the gutter's coordinates.
+            let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: gutter).y
+            let y = top + layout.y(ofLine: line) + layout.lineHeight / 2 - editor.drawingRect.minY
+            XCTAssertEqual(gutter.line(at: NSPoint(x: x, y: y)), line + 1)
+            let point = gutter.convert(NSPoint(x: x, y: y), to: nil)
+            return NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                      context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        gutter.mouseDown(with: event(.leftMouseDown, x: 30, line: 2))
+        gutter.rightMouseDown(with: event(.rightMouseDown, x: 30, line: 4))
+        gutter.mouseDown(with: event(.leftMouseDown, x: 5, line: 2))
+        XCTAssertEqual(numbers.map(\.0), [3, 5])
+        XCTAssertEqual(numbers.map(\.1), [.leftMouseDown, .rightMouseDown])
+        XCTAssertEqual(marks, [3], "left of the numbers: the line's marks")
+
+        // A breakpoint mark draws without taking the marks' clicks.
+        gutter.marks = [3: [GutterMark(style: .breakpoint(enabled: true, verified: false), color: .systemBlue)]]
+        gutter.display()
+    }
 }
