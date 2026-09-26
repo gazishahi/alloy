@@ -37,9 +37,11 @@ public struct SyntaxTheme: Sendable {
             "keyword": keyword, "conditional": keyword, "repeat": keyword, "include": keyword, "exception": keyword,
             "storageclass": keyword, "boolean": keyword, "constant.builtin": keyword, "variable.builtin": keyword,
             "attribute": keyword, "label": keyword,
+            // CSS's at-rules are their own captures in its query (`"@media" @media`).
+            "charset": keyword, "import": keyword, "media": keyword, "keyframes": keyword, "supports": keyword,
             "string": string, "character": string, "escape": number, "string.escape": number, "string.regex": string,
             "comment": comment, "spell": comment,
-            "number": number, "float": number, "constant.numeric": number,
+            "number": number, "float": number, "constant.numeric": number, "constant": number,
             "type": type, "type.builtin": type, "constructor": type, "namespace": type, "module": type,
             "function": function, "method": function, "function.method": function, "function.call": function, "function.macro": function,
             "property": property, "field": property, "variable.member": property, "variable.parameter": property, "parameter": property,

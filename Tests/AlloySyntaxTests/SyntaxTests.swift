@@ -16,6 +16,11 @@ final class SyntaxTests: XCTestCase {
             "go": "package main\nfunc f() string { return \"x\" } // c", "lua": "local x = 'y' -- c", "rb": "def f\n  'x' # c\nend",
             "c": "int main(void) { return 0; } // c", "cpp": "class A { public: int x = 0; }; // c", "json": "{\"a\": 1, \"b\": true}",
             "md": "# Title\n\nSome `code` text.",
+            "yaml": "name: side # c\nitems:\n  - 1\n  - true", "toml": "[package]\nname = \"side\" # c\nversion = 1",
+            "html": "<!-- c --><div class=\"a\">hi</div>", "css": ".a { color: red; } /* c */", "scss": "$x: 1px;\n.a { .b { margin: $x; } }",
+            "sh": "#!/bin/bash\nif [ -n \"$1\" ]; then echo hi; fi # c", "java": "class A { int x = 1; } // c",
+            "php": "<?php\nfunction f() { return 'x'; } // c", "dockerfile": "FROM swift:6\nRUN echo hi # c",
+            "mk": "# c\nall: build\n\t@echo done\n", "sql": "SELECT id, name FROM users WHERE id = 1; -- c",
         ]
         for (ext, source) in samples {
             let highlighter = try XCTUnwrap(SyntaxHighlighter(fileExtension: ext, text: Rope(source), theme: theme), "\(ext) loads")
@@ -23,9 +28,15 @@ final class SyntaxTests: XCTestCase {
             XCTAssertFalse(colored.isEmpty, "\(ext) colors something: \(highlighter.treeDescription.prefix(200))")
         }
         XCTAssertNil(SyntaxHighlighter(fileExtension: "txt", text: Rope("plain")), "plain text isn't highlighted")
+        // Files known by name.
+        XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Dockerfile"), "dockerfile")
+        XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Dockerfile.dev"), "dockerfile")
+        XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Makefile"), "mk")
+        XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "main.Swift"), "swift")
         // Alloy's split of each query into patterns agrees with tree-sitter's count, which the
         // container companions' precedence depends on.
-        for ext in ["swift", "ts", "tsx", "js", "py", "rs", "go", "lua", "rb", "c", "cpp", "json", "md"] {
+        for ext in ["swift", "ts", "tsx", "js", "py", "rs", "go", "lua", "rb", "c", "cpp", "json", "md",
+                    "yaml", "toml", "html", "css", "scss", "sh", "java", "php", "dockerfile", "mk", "sql"] {
             let language = try XCTUnwrap(SyntaxLanguage.forExtension(ext))
             XCTAssertEqual(language.splitPatternCount, language.highlights.patternCount, ext)
         }

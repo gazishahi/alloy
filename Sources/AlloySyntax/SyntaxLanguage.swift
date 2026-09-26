@@ -13,6 +13,17 @@ import TreeSitterRust
 import TreeSitterSwiftGrammar
 import TreeSitterTSX
 import TreeSitterTypeScript
+import TreeSitterYAMLGrammar
+import TreeSitterTOMLGrammar
+import TreeSitterHTMLGrammar
+import TreeSitterCSSGrammar
+import TreeSitterSCSSGrammar
+import TreeSitterBashGrammar
+import TreeSitterJavaGrammar
+import TreeSitterPHPGrammar
+import TreeSitterDockerfileGrammar
+import TreeSitterMakeGrammar
+import TreeSitterSQLGrammar
 
 /// A language Alloy highlights: its tree-sitter grammar and its highlight query
 /// (docs/DESIGN.md, A3). The queries are the grammars' own, kept in `Queries/` so they load
@@ -80,7 +91,35 @@ public final class SyntaxLanguage: @unchecked Sendable {
         "cpp": "cpp", "hpp": "cpp", "cc": "cpp", "cxx": "cpp", "hh": "cpp",
         "json": "json",
         "md": "markdown", "markdown": "markdown",
+        "yaml": "yaml", "yml": "yaml",
+        "toml": "toml",
+        "html": "html", "htm": "html", "xhtml": "html",
+        "css": "css",
+        "scss": "scss",
+        "sh": "bash", "bash": "bash", "zsh": "bash", "command": "bash",
+        "java": "java",
+        "php": "php",
+        "dockerfile": "dockerfile", "containerfile": "dockerfile",
+        "mk": "make", "make": "make",
+        "sql": "sql",
     ]
+
+    /// Files known by their whole name (they have no extension to go by), as the extension
+    /// that stands for them.
+    static let fileNames: [String: String] = [
+        "dockerfile": "dockerfile", "containerfile": "dockerfile",
+        "makefile": "mk", "gnumakefile": "mk",
+        ".bashrc": "bash", ".zshrc": "bash", ".bash_profile": "bash", ".profile": "bash", ".zprofile": "bash",
+    ]
+
+    /// The extension Alloy (and a language server) goes by for a file: its own, or one standing
+    /// for its name (`Dockerfile`, `Makefile`, `Dockerfile.dev`).
+    public static func languageExtension(forFileName name: String) -> String {
+        let lower = name.lowercased()
+        if let byName = fileNames[lower] { return byName }
+        if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "dockerfile" }
+        return (name as NSString).pathExtension.lowercased()
+    }
 
     private struct Spec {
         let language: @Sendable () -> OpaquePointer
@@ -101,6 +140,17 @@ public final class SyntaxLanguage: @unchecked Sendable {
         "cpp": Spec(language: { tree_sitter_cpp() }, query: "cpp"),
         "json": Spec(language: { tree_sitter_json() }, query: "json"),
         "markdown": Spec(language: { tree_sitter_markdown() }, query: "markdown"),
+        "yaml": Spec(language: { alloy_tree_sitter_yaml() }, query: "yaml"),
+        "toml": Spec(language: { alloy_tree_sitter_toml() }, query: "toml"),
+        "html": Spec(language: { alloy_tree_sitter_html() }, query: "html"),
+        "css": Spec(language: { alloy_tree_sitter_css() }, query: "css"),
+        "scss": Spec(language: { alloy_tree_sitter_scss() }, query: "scss"),
+        "bash": Spec(language: { alloy_tree_sitter_bash() }, query: "bash"),
+        "java": Spec(language: { alloy_tree_sitter_java() }, query: "java"),
+        "php": Spec(language: { alloy_tree_sitter_php() }, query: "php"),
+        "dockerfile": Spec(language: { alloy_tree_sitter_dockerfile() }, query: "dockerfile"),
+        "make": Spec(language: { alloy_tree_sitter_make() }, query: "make"),
+        "sql": Spec(language: { alloy_tree_sitter_sql() }, query: "sql"),
     ]
 
     private nonisolated(unsafe) static var cache: [String: SyntaxLanguage] = [:]

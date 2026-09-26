@@ -56,6 +56,19 @@ final class SyntaxSymbolsTests: XCTestCase {
         XCTAssertEqual(try outline("json", "{\"name\": \"x\", \"scripts\": {\"build\": \"y\"}}"), ["key name", "key scripts", "  key build"])
     }
 
+    func testTheGrammarsAddedIn050() throws {
+        XCTAssertEqual(try outline("yaml", "name: side\njobs:\n  build:\n    runs-on: mac\n"), ["key name", "key jobs", "  key build", "    key runs-on"])
+        XCTAssertEqual(try outline("toml", "[package]\nname = \"x\"\n[dependencies]\n"), ["module package", "module dependencies"])
+        XCTAssertEqual(try outline("css", ".a, .b { color: red; }\n@keyframes spin { }\n"), ["key .a, .b", "key spin"])
+        XCTAssertEqual(try outline("sh", "build() { echo hi; }\nfunction test { :; }\n"), ["function build", "function test"])
+        XCTAssertEqual(try outline("java", "class A {\n  int count;\n  A() {}\n  void run() {}\n}\ninterface B {}\n"),
+                       ["class A", "  property count", "  constructor A", "  method run", "interface B"])
+        XCTAssertEqual(try outline("php", "<?php\nclass A { function run() {} }\nfunction f() {}\n"), ["class A", "  method run", "function f"])
+        XCTAssertEqual(try outline("dockerfile", "FROM swift:6 AS build\nRUN make\nFROM alpine\n"), ["module build", "module alpine"])
+        XCTAssertEqual(try outline("mk", "all: build\n\techo\nbuild:\n\tswift build\n"), ["function all", "function build"])
+        XCTAssertEqual(try outline("sql", "CREATE TABLE users (id int);\nCREATE VIEW active AS SELECT * FROM users;\n"), ["struct users", "type active"])
+    }
+
     func testABigFileIsQuick() throws {
         let source = (0..<20_000).map { "func f\($0)() {\n    let a = \($0)\n}\n" }.joined()
         let highlighter = try XCTUnwrap(SyntaxHighlighter(fileExtension: "swift", text: Rope(source)))

@@ -194,6 +194,53 @@ enum SymbolRules {
         "json": [
             "pair": Rule(kind: .key, name: field("key")),
         ],
+        "yaml": [
+            "block_mapping_pair": Rule(kind: .key, name: field("key")),
+        ],
+        "toml": [
+            "table": Rule(kind: .module, name: first(["bare_key", "dotted_key", "quoted_key"], depth: 1)),
+            "table_array_element": Rule(kind: .module, name: first(["bare_key", "dotted_key", "quoted_key"], depth: 1)),
+        ],
+        "css": [
+            "rule_set": Rule(kind: .key, name: first(["selectors"], depth: 1), hasChildren: false),
+            "keyframes_statement": Rule(kind: .key, name: first(["keyframes_name"], depth: 1), hasChildren: false),
+        ],
+        "scss": [
+            "rule_set": Rule(kind: .key, name: first(["selectors"], depth: 1)),
+            "mixin_statement": Rule(kind: .function, name: field("name")),
+        ],
+        "bash": [
+            "function_definition": Rule(kind: .function, name: field("name")),
+        ],
+        "java": [
+            "class_declaration": Rule(kind: .class, name: field("name")),
+            "interface_declaration": Rule(kind: .interface, name: field("name")),
+            "enum_declaration": Rule(kind: .enum, name: field("name")),
+            "record_declaration": Rule(kind: .struct, name: field("name")),
+            "method_declaration": Rule(kind: .method, name: field("name")),
+            "constructor_declaration": Rule(kind: .constructor, name: field("name")),
+            "field_declaration": Rule(kind: .property, name: first(["identifier"], depth: 2), hasChildren: false),
+        ],
+        "php": [
+            "class_declaration": Rule(kind: .class, name: field("name")),
+            "interface_declaration": Rule(kind: .interface, name: field("name")),
+            "trait_declaration": Rule(kind: .interface, name: field("name")),
+            "enum_declaration": Rule(kind: .enum, name: field("name")),
+            "function_definition": Rule(kind: .function, name: field("name")),
+            "method_declaration": Rule(kind: .method, name: field("name")),
+        ],
+        "dockerfile": [
+            "from_instruction": Rule(kind: .module, name: either(field("as"), first(["image_spec"], depth: 1)), hasChildren: false),
+        ],
+        "make": [
+            "rule": Rule(kind: .function, name: first(["targets"], depth: 1), hasChildren: false),
+        ],
+        "sql": [
+            "create_table": Rule(kind: .struct, name: first(["object_reference"], depth: 1), hasChildren: false),
+            "create_view": Rule(kind: .type, name: first(["object_reference"], depth: 1), hasChildren: false),
+            "create_function": Rule(kind: .function, name: first(["object_reference"], depth: 1), hasChildren: false),
+            "create_index": Rule(kind: .key, name: first(["identifier"], depth: 1), hasChildren: false),
+        ],
         "markdown": [
             "atx_heading": Rule(kind: .heading, name: either(first(["inline", "heading_content"], depth: 1), { $0.namedChild(at: 1) }), hasChildren: false),
             "setext_heading": Rule(kind: .heading, name: { $0.namedChild(at: 0) }, hasChildren: false),
