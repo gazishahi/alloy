@@ -27,6 +27,8 @@ public final class AlloyEditorView: NSView {
     /// The document's foldable regions, `header...last` (folding hides `header + 1 ... last`).
     public internal(set) var foldRegions: [ClosedRange<Int>] = []
     var foldRegionsGeneration = 0
+    /// Folds of documents this view showed before, by buffer (`rememberFolds`).
+    var foldMemory: [ObjectIdentifier: [(ClosedRange<Int>, String)]] = [:]
     /// The band behind a folded region's first line.
     public var foldedLineColor: SIMD4<Float> = [0.5, 0.5, 0.5, 0.12] { didSet { setNeedsRender() } }
     /// Wrap to the view's width (Make's default), or not.
@@ -124,10 +126,12 @@ public final class AlloyEditorView: NSView {
     /// Shows another buffer (a tab switch).
     public func setBuffer(_ buffer: TextBuffer) {
         textGeneration += 1
+        rememberFolds()
         self.buffer.onChange = nil
         self.buffer = buffer
         buffer.onChange = { [weak self] change in self?.textChanged(change) }
         documentLayout.reset(buffer.text)
+        restoreFolds()
         updateDocumentHeight()
         setNeedsRender()
         scheduleFoldRegions()
@@ -521,7 +525,8 @@ public final class AlloyEditorView: NSView {
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
         frame.decorations = decorations
-        frame.lineBackground = foldAwareLineBackground
+        frame.lineBackground = lineBackground
+        frame.lineSuffixes = foldSuffixes
         if let marked = documentView.composingRange {
             frame.decorations.append(Decoration(range: marked, color: theme.text, style: .underline))
         }

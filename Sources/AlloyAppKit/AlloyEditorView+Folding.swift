@@ -115,11 +115,56 @@ extension AlloyEditorView {
         setHidden(documentLayout.hiddenLines.filter { !touched.contains($0) })
     }
 
-    /// The owner's line colors, and the band on a folded region's first line.
-    var foldAwareLineBackground: ((Int) -> SIMD4<Float>?)? {
-        guard !documentLayout.hiddenLines.isEmpty else { return lineBackground }
-        let own = lineBackground, band = foldedLineColor
-        let headers = Set(documentLayout.hiddenLines.map { $0.lowerBound - 1 })
-        return { row in own?(row) ?? (headers.contains(row) ? band : nil) }
+    /// What a folded line shows after its text: "… }" (the closing line, when the region ends
+    /// on one), or "…", on a pill. The region reads as one line, as Xcode shows it.
+    var foldSuffixes: [Int: LineSuffix] {
+        guard !documentLayout.hiddenLines.isEmpty else { return [:] }
+        var text = theme.text
+        text.w *= 0.65
+        var result: [Int: LineSuffix] = [:]
+        for range in documentLayout.hiddenLines {
+            result[range.lowerBound - 1] = LineSuffix(text: Self.foldPlaceholder(closing: buffer.text.substring(buffer.text.range(ofLine: range.upperBound))),
+                                                      color: text, background: foldedLineColor)
+        }
+        return result
+    }
+
+    /// "… }" for a region that ends on its closing bracket, "…" for one that doesn't.
+    static func foldPlaceholder(closing line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first, "})]".contains(first) else { return "\u{2026}" }
+        return "\u{2026} " + trimmed
+    }
+
+    /// A click on a folded line's pill opens it.
+    func unfoldIfClickedPlaceholder(at point: CGPoint) -> Bool {
+        let line = documentLayout.line(atY: point.y).line
+        guard isFolded(line: line), let suffix = foldSuffixes[line] else { return false }
+        guard documentLayout.suffixRect(line: line, text: suffix.text).contains(point) else { return false }
+        unfold(line: line)
+        return true
+    }
+
+    // MARK: Folds per document
+
+    /// Folds a document had when another replaced it in this view (a tab switch): restored when
+    /// it comes back, if the lines they hang from still read the same.
+    func rememberFolds() {
+        guard !documentLayout.hiddenLines.isEmpty else { foldMemory[ObjectIdentifier(buffer)] = nil; return }
+        let text = buffer.text
+        let entries = documentLayout.hiddenLines.map { range -> (ClosedRange<Int>, String) in
+            (range, text.substring(text.range(ofLine: range.lowerBound - 1)))
+        }
+        foldMemory[ObjectIdentifier(buffer)] = entries
+        if foldMemory.count > 64, let any = foldMemory.keys.first(where: { $0 != ObjectIdentifier(buffer) }) { foldMemory[any] = nil }
+    }
+
+    func restoreFolds() {
+        guard let entries = foldMemory[ObjectIdentifier(buffer)] else { return }
+        let text = buffer.text
+        let valid = entries.filter { range, header in
+            range.lowerBound >= 1 && range.upperBound < text.lineCount && text.substring(text.range(ofLine: range.lowerBound - 1)) == header
+        }.map(\.0)
+        if !valid.isEmpty { setHidden(valid) }
     }
 }

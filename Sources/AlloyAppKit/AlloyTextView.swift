@@ -434,6 +434,8 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         window?.makeFirstResponder(self)
         if hasMarkedText() { inputContext?.discardMarkedText(); unmarkText() }
         let point = convert(event.locationInWindow, from: nil)
+        // A folded line's "… }": opens the fold.
+        if event.clickCount == 1, editor?.unfoldIfClickedPlaceholder(at: point) == true { return }
         let offset = layout.offset(at: point)
         dragGranularity = event.clickCount
         dragAddsCaret = event.modifierFlags.contains(.option) && event.clickCount == 1

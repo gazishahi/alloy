@@ -253,6 +253,26 @@ public final class DocumentLayout {
         return laid
     }
 
+    private var suffixes: [String: (line: LaidOutLine, width: CGFloat)] = [:]
+
+    /// A suffix's layout (unwrapped), shaped once per text.
+    public func suffixLayout(_ text: String) -> (line: LaidOutLine, width: CGFloat) {
+        if let cached = suffixes[text] { return cached }
+        if suffixes.count > 200 { suffixes.removeAll() }
+        let laid = LaidOutLine(text: text, font: font, tabWidth: tabWidth, wrapWidth: nil)
+        let width = laid.caretX(at: (text as NSString).length).x
+        suffixes[text] = (laid, width)
+        return (laid, width)
+    }
+
+    /// Where a line's suffix pill sits (a click there opens a fold), in document points.
+    public func suffixRect(line: Int, text: String) -> CGRect {
+        let laid = layout(line: line)
+        let endX = laid.caretX(at: (laid.text as NSString).length).x
+        let top = y(ofLine: line) + CGFloat(laid.rows.count - 1) * lineHeight
+        return CGRect(x: insets.width + endX + LineSuffix.gap, y: top, width: suffixLayout(text).width + LineSuffix.padding * 2, height: lineHeight)
+    }
+
     /// The y of a line's first row (top), in points, document coordinates.
     public func y(ofLine line: Int) -> CGFloat {
         insets.height + CGFloat(rowIndex.prefix(line)) * lineHeight

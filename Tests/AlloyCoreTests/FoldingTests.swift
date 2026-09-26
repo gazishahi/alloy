@@ -16,7 +16,7 @@ final class FoldingTests: XCTestCase {
         let e = 3
         """
         let regions = Folding.ranges(in: Rope(source))
-        XCTAssertEqual(regions, [0...6, 1...4], "struct to the line before its brace; func past a blank line inside it")
+        XCTAssertEqual(regions, [0...7, 1...5], "each to its closing brace; func past a blank line inside it")
         XCTAssertEqual(Folding.ranges(in: Rope("one\ntwo\nthree")), [], "nothing deeper, nothing to fold")
         XCTAssertEqual(Folding.ranges(in: Rope("a:\n\tb\n\tc\nd")), [0...2], "tabs count as a stop")
     }
@@ -27,6 +27,7 @@ final class FoldingTests: XCTestCase {
         let start = Date()
         let regions = Folding.ranges(in: text)
         XCTAssertEqual(regions.count, 40_000)
+        XCTAssertEqual(regions.first, 0...4, "func to its closing brace")
         XCTAssertLessThan(Date().timeIntervalSince(start), 2, "100,000 lines, off the main thread in the app")
     }
 }

@@ -30,12 +30,12 @@ final class FoldingViewTests: XCTestCase {
         let full = layout.contentHeight
         editor.fold(line: 1)
         XCTAssertTrue(editor.isFolded(line: 1))
-        XCTAssertEqual(layout.hiddenLines, [2...3])
-        XCTAssertEqual(layout.contentHeight, full - 2 * layout.lineHeight, accuracy: 0.5, "two lines' less")
-        XCTAssertEqual(layout.visibleLines(from: 0, to: 1000).map(\.line), [0, 1, 4, 5, 6])
-        XCTAssertEqual(layout.line(atY: layout.y(ofLine: 4) + 1).line, 4, "the line after a fold is where the fold's lines were")
+        XCTAssertEqual(layout.hiddenLines, [2...4], "the body and its closing brace")
+        XCTAssertEqual(layout.contentHeight, full - 3 * layout.lineHeight, accuracy: 0.5, "three lines' less")
+        XCTAssertEqual(layout.visibleLines(from: 0, to: 1000).map(\.line), [0, 1, 5, 6])
+        XCTAssertEqual(layout.line(atY: layout.y(ofLine: 5) + 1).line, 5, "the line after a fold is where the fold's lines were")
         editor.fold(line: 0)
-        XCTAssertEqual(layout.hiddenLines, [1...4], "an outer fold takes the inner one in")
+        XCTAssertEqual(layout.hiddenLines, [1...5], "an outer fold takes the inner one in")
         editor.unfoldAll()
         XCTAssertEqual(layout.hiddenLines, [])
         XCTAssertEqual(layout.contentHeight, full, accuracy: 0.5)
@@ -59,19 +59,40 @@ final class FoldingViewTests: XCTestCase {
         XCTAssertEqual(editor.buffer.text.line(containing: editor.buffer.selections[0].head), 1, "the caret moves to the line that stays")
         // An edit above the fold moves it down with its lines.
         editor.buffer.apply([TextEdit(range: 0..<0, text: "// top\n")], kind: .typing)
-        XCTAssertEqual(editor.documentLayout.hiddenLines, [3...4])
+        XCTAssertEqual(editor.documentLayout.hiddenLines, [3...5])
         // An edit on the fold's first line opens it.
         let header = editor.buffer.text.offset(ofLine: 2)
         editor.buffer.apply([TextEdit(range: header..<header, text: " ")], kind: .typing)
         XCTAssertEqual(editor.documentLayout.hiddenLines, [])
     }
 
-    func testFoldAllAndTheBand() throws {
+    func testAFoldedRegionReadsAsOneLineAndItsPillOpensIt() throws {
         try open()
-        editor.foldAll(nil)
-        XCTAssertEqual(editor.documentLayout.hiddenLines, [1...4])
-        XCTAssertNotNil(editor.foldAwareLineBackground?(0), "the folded line has a band")
-        XCTAssertNil(editor.foldAwareLineBackground?(5))
+        // The regions take in their closing braces.
+        XCTAssertEqual(editor.foldRegions, [0...5, 1...4])
+        editor.fold(line: 1)
+        XCTAssertEqual(editor.documentLayout.hiddenLines, [2...4], "the body and its closing brace")
+        XCTAssertEqual(editor.foldSuffixes[1]?.text, "\u{2026} }", "func b() { … }")
+        XCTAssertEqual(AlloyEditorView.foldPlaceholder(closing: "    return x"), "\u{2026}", "no closing bracket: just the ellipsis")
+        let pill = editor.documentLayout.suffixRect(line: 1, text: "\u{2026} }")
+        XCTAssertTrue(editor.unfoldIfClickedPlaceholder(at: CGPoint(x: pill.midX, y: pill.midY)))
+        XCTAssertFalse(editor.isFolded(line: 1))
+    }
+
+    func testFoldsComeBackWithTheirDocument() throws {
+        try open()
+        editor.fold(line: 1)
+        let first = editor.buffer
+        editor.setBuffer(TextBuffer("another\ndocument"))
+        XCTAssertEqual(editor.documentLayout.hiddenLines, [])
+        editor.setBuffer(first)
+        XCTAssertEqual(editor.documentLayout.hiddenLines, [2...4], "the tab comes back folded as it was")
+        // Changed while away, where the fold hung from: it doesn't come back folded.
+        let other = TextBuffer("x")
+        editor.setBuffer(other)
+        first.apply([TextEdit(range: first.text.range(ofLine: 1), text: "    func renamed() {")], kind: .typing)
+        editor.setBuffer(first)
+        XCTAssertEqual(editor.documentLayout.hiddenLines, [])
     }
 
     func testTheMinimapFollowsAndScrollsTheEditor() throws {

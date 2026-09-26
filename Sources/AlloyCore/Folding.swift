@@ -1,8 +1,10 @@
 /// Where a document can fold: a line whose following lines are indented deeper starts a region,
-/// and the region runs to the last of them. Indentation works in every language, with or without
-/// a grammar; a closing brace at the opening line's depth stays outside, visible.
+/// and the region runs to the last of them, and on to the line that closes it (a `}`, `)`, `]` or
+/// `end` back at the opening line's depth), so a folded function reads as one line,
+/// `func add(a, b) { … }`. Indentation works in every language, with or without a grammar.
 public enum Folding {
-    /// Regions as `header...last`: folding one hides `header + 1 ... last`.
+    /// Regions as `header...last`: folding one hides `header + 1 ... last` (its closing line
+    /// included, when it has one).
     public static func ranges(in text: Rope, tabSize: Int = 4) -> [ClosedRange<Int>] {
         var result: [ClosedRange<Int>] = []
         // Open regions: their header and its depth, innermost last.
@@ -11,10 +13,15 @@ public enum Folding {
         // One pass over the text's UTF-16, each line's indentation read as it goes: copying
         // every line out first cost most of the time on a big file.
         var line = 0, column = 0, inIndent = true
-        func lineHasText(depth: Int) {
+        // The first character of a line, to tell a closing bracket.
+        var firstUnit: UInt16 = 0
+        func lineHasText(depth: Int, first: UInt16) {
+            let isCloser = first == 0x7D || first == 0x29 || first == 0x5D
             while let top = open.last, top.depth >= depth {
                 open.removeLast()
-                if lastNonBlank > top.header { result.append(top.header...lastNonBlank) }
+                guard lastNonBlank > top.header else { continue }
+                // Back at the header's depth on a closing bracket: the region takes it in.
+                if top.depth == depth, isCloser { result.append(top.header...line) } else { result.append(top.header...lastNonBlank) }
             }
             open.append((line, depth))
             lastNonBlank = line
@@ -33,7 +40,8 @@ public enum Folding {
             case 0x0D: break
             default:
                 inIndent = false
-                lineHasText(depth: column)
+                firstUnit = unit
+                lineHasText(depth: column, first: firstUnit)
             }
         }
         for region in open.reversed() where lastNonBlank > region.header {

@@ -51,6 +51,21 @@ public struct Decoration: Sendable {
     }
 }
 
+/// Text after a line's end that isn't in the document (a fold's placeholder), and its pill.
+public struct LineSuffix: Sendable, Equatable {
+    public var text: String
+    public var color: SIMD4<Float>
+    public var background: SIMD4<Float>
+    public init(text: String, color: SIMD4<Float>, background: SIMD4<Float>) {
+        self.text = text
+        self.color = color
+        self.background = background
+    }
+    /// Space between the line's text and the pill, and inside the pill, in points.
+    public static let gap: CGFloat = 6
+    public static let padding: CGFloat = 5
+}
+
 /// What one frame shows.
 public struct RenderFrame {
     /// The top of the viewport in document points.
@@ -67,6 +82,8 @@ public struct RenderFrame {
     /// A tint across a whole line's rows, edge to edge (a diff's added and removed lines).
     /// Asked only for the lines on screen.
     public var lineBackground: ((Int) -> SIMD4<Float>?)?
+    /// Text drawn after a line's own, on a pill: a folded region's "… }".
+    public var lineSuffixes: [Int: LineSuffix] = [:]
 
     public init(scrollY: CGFloat, size: CGSize, scale: CGFloat, selections: [Selection], caretVisible: Bool = true,
                 theme: RenderTheme, styles: ((Int) -> [StyleSpan])? = nil) {
@@ -359,6 +376,31 @@ public final class TextRenderer {
                     }
                 }
                 spanIndex = 0
+            }
+
+            // A suffix after the line's last row, on its pill.
+            if let suffix = frame.lineSuffixes[line] {
+                let lastRow = laid.rows.count - 1
+                let endX = laid.caretX(at: (laid.text as NSString).length).x
+                let suffixLayout = layout.suffixLayout(suffix.text)
+                let width = suffixLayout.width
+                let x0 = layout.insets.width + endX + LineSuffix.gap
+                let rowTop = top + CGFloat(lastRow) * lineHeight
+                solids.append(Quad(rect: rect(x0, rowTop + 2, width + LineSuffix.padding * 2, lineHeight - 4), uv: .zero, color: suffix.background, kind: 0))
+                let baseline = rowTop + layout.ascent
+                for run in suffixLayout.line.rows.first?.runs ?? [] {
+                    for g in 0..<run.glyphs.count {
+                        let penX = (x0 + LineSuffix.padding + run.positions[g].x) * scale
+                        let penY = ((baseline - frame.scrollY) - run.positions[g].y) * scale
+                        let snappedX = floor(penX)
+                        let subpixel = min(GlyphAtlas.subpixelSteps - 1, Int((penX - snappedX) * CGFloat(GlyphAtlas.subpixelSteps)))
+                        guard let entry = atlas.entry(font: run.font, glyph: run.glyphs[g], subpixel: subpixel, scale: scale, isColor: run.isColor),
+                              entry.region.width > 0 else { continue }
+                        glyphs.append(Quad(rect: [Float(snappedX + entry.offset.x), Float(penY.rounded() + entry.offset.y), Float(entry.region.width), Float(entry.region.height)],
+                                           uv: [Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)],
+                                           color: suffix.color, kind: entry.isColor ? 2 : 1))
+                    }
+                }
             }
         }
 

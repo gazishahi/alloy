@@ -16,8 +16,9 @@ agents that edit alongside you, drawn with Metal.
 | **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
 
 Editing: multiple cursors (⌥-click, ⌥⌘↑/↓), column selection (⌥-drag), code folding (the gutter,
-or `foldAtCaret`, `unfoldAtCaret`, `foldAll`, `unfoldAll`; folded lines take no space, and a
-selection that lands inside opens them), and a minimap (`editor.minimap`, placed by the owner).
+or `foldAtCaret`, `unfoldAtCaret`, `foldAll`, `unfoldAll`; a folded region reads as one line, `header { … }`, and
+clicking the `… }` opens it; a selection that lands inside opens it too; each document keeps
+its folds when the editor switches between them), and a minimap (`editor.minimap`, placed by the owner).
 
 Offsets are UTF-16 throughout, the unit AppKit and LSP use; UTF-8 conversions are there for
 tree-sitter.
