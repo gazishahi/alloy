@@ -13,6 +13,7 @@ final class SnippetViewTests: XCTestCase {
 
     private func open(_ text: String) throws {
         try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        window?.orderOut(nil)
         editor = try AlloyEditorView(buffer: TextBuffer(text), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = editor
@@ -20,8 +21,6 @@ final class SnippetViewTests: XCTestCase {
         editor.layout()
         window.makeFirstResponder(editor.textView)
     }
-
-    override func tearDown() { window?.orderOut(nil) }
 
     private func type(_ text: String) {
         editor.textView.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
