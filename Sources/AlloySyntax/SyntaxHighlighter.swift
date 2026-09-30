@@ -85,7 +85,12 @@ public final class SyntaxHighlighter {
     /// Tests: query every line from the root, the slow way the shortcut must agree with.
     nonisolated(unsafe) static var queryFromRoot = false
 
-    private let queue = DispatchQueue(label: "alloy.syntax.parse", qos: .userInitiated)
+    /// An editor's own parses: its own queue, at the priority of typing.
+    private let queue: DispatchQueue
+    /// Highlighters made to color while scrolling (`parseInBackground`) share one queue at
+    /// utility priority: a view that makes many (a diff of hundreds of files) parsed them all at
+    /// once, one queue each, on every core.
+    private static let sharedBackgroundQueue = DispatchQueue(label: "alloy.syntax.parse.shared", qos: .utility)
     private nonisolated(unsafe) let backgroundParser = Parser()
     private var parseInFlight = false
     /// Edits that arrived while a background parse ran: replayed onto its tree when it lands.
@@ -100,6 +105,7 @@ public final class SyntaxHighlighter {
         self.language = language
         self.theme = theme
         self.text = text
+        queue = background ? Self.sharedBackgroundQueue : DispatchQueue(label: "alloy.syntax.parse", qos: .userInitiated)
         try? parser.setLanguage(language.language)
         try? backgroundParser.setLanguage(language.language)
         if !background, text.utf16Count <= Self.synchronousLimit {
@@ -125,7 +131,11 @@ public final class SyntaxHighlighter {
         let started = CACurrentMediaTime()
         let parser = backgroundParser
         let box = ParseResult()
+        // Weak: a highlighter let go before its turn on the queue isn't parsed at all, and one
+        // let go during its parse doesn't live on to deliver it.
+        let owner = WeakHighlighter(self)
         queue.async {
+            guard owner.value != nil else { return }
             let old = base?.mutableCopy()
             let parsedTree = Self.parse(parser, text: snapshot, oldTree: old)
             if let parsed = parsedTree {
@@ -133,7 +143,7 @@ public final class SyntaxHighlighter {
                 box.tree = parsed.copy()
             }
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { self.backgroundParseLanded(box, started: started) }
+                MainActor.assumeIsolated { owner.value?.backgroundParseLanded(box, started: started) }
             }
         }
     }
@@ -418,4 +428,10 @@ public final class SyntaxHighlighter {
 private final class ParseResult: @unchecked Sendable {
     var tree: Tree?
     var changed: [TSRange]?
+}
+
+/// A highlighter's parse holds it weakly: reading a weak reference from the parse queue is safe.
+private final class WeakHighlighter: @unchecked Sendable {
+    weak var value: SyntaxHighlighter?
+    init(_ value: SyntaxHighlighter) { self.value = value }
 }

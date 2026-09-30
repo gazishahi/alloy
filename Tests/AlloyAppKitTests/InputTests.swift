@@ -81,6 +81,29 @@ final class InputTests: XCTestCase {
         XCTAssertGreaterThan(carets[0], rowEnd, "down moves to the next visual row")
     }
 
+    /// 2026-09-30 audit, H9: a composition left open across a tab switch or an undo kept its
+    /// range, and committing it replaced unrelated characters at that offset in the new text.
+    func testACompositionEndsWithATabSwitchAndAnUndo() throws {
+        let none = NSRange(location: NSNotFound, length: 0)
+        try open("abc")
+        caret(3)
+        view.setMarkedText("にほん", selectedRange: NSRange(location: 3, length: 0), replacementRange: none)
+        let other = TextBuffer("0123456789")
+        editor.setBuffer(other)
+        XCTAssertFalse(view.hasMarkedText(), "the composition ended with the switch")
+        view.insertText("中", replacementRange: none)
+        XCTAssertTrue(other.string.contains("0123456789"), "no character of the new text was replaced: \(other.string)")
+
+        try open("abcdef")
+        caret(3)
+        view.insertText("x", replacementRange: none)
+        view.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0), replacementRange: none)
+        view.undo(nil)
+        XCTAssertFalse(view.hasMarkedText(), "the composition ended with the undo")
+        view.insertText("日本", replacementRange: none)
+        XCTAssertTrue(text.hasSuffix("def"), "nothing after the caret was eaten: \(text)")
+    }
+
     /// An input method composing Japanese: marked text shows and changes in place, commits as
     /// one edit, and undoes as one step.
     func testCompositionIsMarkedThenCommittedAsOneUndoStep() throws {

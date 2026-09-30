@@ -162,6 +162,8 @@ public final class AlloyEditorView: NSView {
 
     /// Shows another buffer (a tab switch).
     public func setBuffer(_ buffer: TextBuffer) {
+        // In the old buffer, where it was typed.
+        documentView.endComposition()
         endSnippet()
         textGeneration += 1
         rememberFolds()
@@ -179,6 +181,8 @@ public final class AlloyEditorView: NSView {
     public var onTextChange: ((TextChange) -> Void)?
 
     private func textChanged(_ change: TextChange) {
+        // The owner replaced the text under a composition: its range no longer means anything.
+        if change.reason == .replace { documentView.endComposition() }
         textGeneration += 1
         onTextChange?(change)
         snippetFollow(change)

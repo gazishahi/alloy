@@ -386,6 +386,16 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         editor?.revealCarets()
     }
 
+    /// Ends a composition in progress, keeping what was composed (as losing focus does). A
+    /// composition's range is an offset into the text it was typed into; after a tab switch, an
+    /// undo, or the text being replaced, it points at something else, and the next keystroke
+    /// replaced unrelated characters there (2026-09-30 audit, H9).
+    public func endComposition() {
+        guard hasMarkedText() else { return }
+        inputContext?.discardMarkedText()
+        unmarkText()
+    }
+
     public func unmarkText() {
         composingRange = nil
         buffer.closeUndoGroup()
@@ -436,7 +446,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
 
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        if hasMarkedText() { inputContext?.discardMarkedText(); unmarkText() }
+        endComposition()
         let point = convert(event.locationInWindow, from: nil)
         // A folded line's "… }": opens the fold.
         if event.clickCount == 1, editor?.unfoldIfClickedPlaceholder(at: point) == true { return }
@@ -600,11 +610,13 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
 
     @objc public func undo(_ sender: Any?) {
         guard canEdit else { return }
+        endComposition()
         if buffer.undo() { editor?.textInputChanged(); editor?.revealCarets(); editor?.onUndoRedo?(false) }
     }
 
     @objc public func redo(_ sender: Any?) {
         guard canEdit else { return }
+        endComposition()
         if buffer.redo() { editor?.textInputChanged(); editor?.revealCarets(); editor?.onUndoRedo?(true) }
     }
 
