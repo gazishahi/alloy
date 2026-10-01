@@ -4,7 +4,7 @@ Alloy is a GPU text editing engine for macOS, in Swift. It's the editor behind t
 [Side](https://github.com/gazishahi/side-releases): a document model built for big files and for
 agents that edit alongside you, drawn with Metal.
 
-**Status: 0.7.1, pre-release.** It runs Side's editor. The API may still change before 1.0.
+**Status: 0.7.2, pre-release.** It runs Side's editor. The API may still change before 1.0.
 
 ## What's in it
 
@@ -32,7 +32,7 @@ tree-sitter.
 ## Using it
 
 ```swift
-.package(url: "https://github.com/gazishahi/alloy", from: "0.7.1")
+.package(url: "https://github.com/gazishahi/alloy", from: "0.7.2")
 ```
 
 ```swift

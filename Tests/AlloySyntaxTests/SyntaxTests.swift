@@ -146,6 +146,38 @@ final class SyntaxTests: XCTestCase {
         }
     }
 
+    /// Lines colored a screenful at a time (`prepare(lines:)`, as the editor asks while it
+    /// scrolls) come out exactly as one at a time, on the same files.
+    func testAScreenfulAtATimeMatchesOneLineAtATime() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let checkouts = root.appendingPathComponent(".build/checkouts")
+        let member = "    @MainActor weak var editor: Editor? = nil // note\n    func say(_ x: Int) -> String { \"x\\(x)\" }\n"
+        let big = FileManager.default.temporaryDirectory.appendingPathComponent("alloy-big-\(UUID().uuidString).swift")
+        try ("final class Big {\n" + String(repeating: member, count: 1_000) + "}\n").write(to: big, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: big) }
+        let files: [(String, URL)] = [
+            ("swift", root.appendingPathComponent("Sources/AlloyAppKit/AlloyTextView.swift")),
+            ("js", checkouts.appendingPathComponent("tree-sitter-javascript/grammar.js")),
+            ("py", checkouts.appendingPathComponent("tree-sitter-python/setup.py")),
+            ("md", root.appendingPathComponent("docs/DESIGN.md")),
+            ("c", checkouts.appendingPathComponent("tree-sitter-c/src/tree_sitter/parser.h")),
+            ("swift", big),
+        ]
+        for (ext, url) in files {
+            guard let source = try? String(contentsOf: url, encoding: .utf8) else { XCTFail("missing \(url.lastPathComponent)"); continue }
+            let rope = Rope(source)
+            let single = try XCTUnwrap(SyntaxHighlighter(fileExtension: ext, text: rope, theme: theme))
+            let batched = try XCTUnwrap(SyntaxHighlighter(fileExtension: ext, text: rope, theme: theme))
+            for start in stride(from: 0, to: rope.lineCount, by: 50) { batched.prepare(lines: start..<(start + 50)) }
+            var differing = 0
+            for line in 0..<rope.lineCount where single.spans(forLine: line) != batched.spans(forLine: line) {
+                if differing < 3 { print("DIFF \(url.lastPathComponent):\(line) \(rope.substring(rope.range(ofLine: line)).prefix(60))") }
+                differing += 1
+            }
+            XCTAssertEqual(differing, 0, "\(url.lastPathComponent): \(differing) of \(rope.lineCount) lines differ")
+        }
+    }
+
     func testIncrementalCost() throws {
         for (ext, open, line) in [("swift", "struct Big {\n", "    let value = compute(input) // note\n"), ("js", "function big() {\n", "  const value = compute(input) // note\n"),
                                   ("swift", "", "let value = compute(input) // note\n")] {

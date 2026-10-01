@@ -19,6 +19,9 @@ public final class AlloyEditorView: NSView {
     public private(set) var documentLayout: DocumentLayout
     public var theme: RenderTheme = .light { didSet { setNeedsRender() } }
     public var styles: ((Int) -> [StyleSpan])? { didSet { setNeedsRender() } }
+    /// Told the lines about to be drawn before `styles` is asked for each: a highlighter colors
+    /// the new ones in one query rather than one each (`SyntaxHighlighter.prepare(lines:)`).
+    public var prepareStyles: ((Range<Int>) -> Void)?
     /// A tint across a line, edge to edge; asked only for lines on screen.
     public var lineBackground: ((Int) -> SIMD4<Float>?)? { didSet { setNeedsRender() } }
     /// Code folding: regions found from indentation, shown in the gutter. Off for a view that
@@ -568,6 +571,11 @@ public final class AlloyEditorView: NSView {
         guard let drawable = canvas.metalLayer.nextDrawable() else { needsRender = true; return }
         canvasHasDrawn = true
         drawableWaitMilliseconds.append((CACurrentMediaTime() - waitStart) * 1000)
+        if let prepareStyles {
+            let first = documentLayout.line(atY: max(0, visible.minY)).line
+            let last = documentLayout.line(atY: visible.maxY).line
+            if first <= last { prepareStyles(first..<min(last + 1, first + 500)) }
+        }
         var frame = RenderFrame(scrollY: visible.minY, size: size, scale: scale, selections: buffer.selections,
                                 caretVisible: isFocused && caretOn, theme: theme, styles: styles)
         frame.decorations = decorations + snippetDecorations

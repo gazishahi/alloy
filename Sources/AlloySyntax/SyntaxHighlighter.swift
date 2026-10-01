@@ -291,16 +291,38 @@ public final class SyntaxHighlighter {
         guard isReady, let tree, let root = tree.rootNode else { return [] }
         let lineRange = text.range(ofLine: line)
         guard !lineRange.isEmpty else { lineCache[line] = []; return [] }
-        let length = lineRange.count
-        // One color slot per UTF-16 unit; captures paint in precedence order.
-        var paint = [Int16](repeating: -1, count: length)
-        var palette: [SIMD4<Float>] = []
-        var paletteIndex: [String: Int16] = [:]
+        let spans = Self.paint(lineRange, captures: collectCaptures(in: lineRange, tree: tree, root: root), theme: theme)
+        lineCache[line] = spans
+        return spans
+    }
 
-        let bytes = UInt32(lineRange.lowerBound * 2)..<UInt32(lineRange.upperBound * 2)
+    /// Colors every uncached line in `lines` with one query over all of them. A view about to
+    /// draw a screenful of new lines (a fling brings ~50 a frame) asks for them together: one
+    /// query per line set up a cursor and walked down from the root each time, and that was
+    /// most of a scrolling frame (2026-09-30, the owner's report of CPU while scrolling). Lines
+    /// come out exactly as `spans(forLine:)` colors them one at a time (a test holds that).
+    public func prepare(lines: Range<Int>) {
+        guard isReady, let tree, let root = tree.rootNode else { return }
+        let lastLine = text.lineCount - 1
+        let wanted = lines.clamped(to: 0..<(lastLine + 1)).filter { lineCache[$0] == nil }
+        guard wanted.count > 2, let first = wanted.first, let last = wanted.last else { return }
+        let union = text.range(ofLine: first).lowerBound..<text.range(ofLine: last).upperBound
+        guard !union.isEmpty else { return }
+        let captures = collectCaptures(in: union, tree: tree, root: root)
+        for line in wanted {
+            let lineRange = text.range(ofLine: line)
+            lineCache[line] = lineRange.isEmpty ? [] : Self.paint(lineRange, captures: captures, theme: theme)
+        }
+    }
+
+    private typealias Capture = (lower: Int, upper: Int, pattern: Int, order: Int, name: String)
+
+    /// Every capture the highlight query makes over `range` (UTF-16), clipped to it.
+    private func collectCaptures(in range: Range<Int>, tree: MutableTree, root: Node) -> [Capture] {
+        let bytes = UInt32(range.lowerBound * 2)..<UInt32(range.upperBound * 2)
         let text = self.text
         let context = Predicate.Context(textProvider: { range, _ in text.substring(range.location..<(range.location + range.length)) })
-        var captures: [(lower: Int, upper: Int, pattern: Int, order: Int, name: String)] = []
+        var captures: [Capture] = []
         var order = 0
         func run(on node: Node) {
             let cursor = language.highlights.execute(node: node, in: tree)
@@ -310,8 +332,8 @@ public final class SyntaxHighlighter {
                 for capture in match.captures {
                     guard let name = capture.name, theme.color(for: name) != nil else { continue }
                     let range = capture.node.range
-                    let lower = max(range.location, lineRange.lowerBound)
-                    let upper = min(range.location + range.length, lineRange.upperBound)
+                    let lower = max(range.location, range.lowerBound)
+                    let upper = min(range.location + range.length, range.upperBound)
                     guard lower < upper else { continue }
                     captures.append((lower, upper, match.patternIndex, order, name))
                     order += 1
@@ -334,8 +356,8 @@ public final class SyntaxHighlighter {
                     guard let rootNode = node, rootNode.byteRange == child.byteRange else { continue }
                     guard let name = capture.name, theme.color(for: name) != nil else { continue }
                     let range = capture.node.range
-                    let lower = max(range.location, lineRange.lowerBound)
-                    let upper = min(range.location + range.length, lineRange.upperBound)
+                    let lower = max(range.location, range.lowerBound)
+                    let upper = min(range.location + range.length, range.upperBound)
                     guard lower < upper else { continue }
                     captures.append((lower, upper, entry.originalIndex, order, name))
                     order += 1
@@ -373,6 +395,21 @@ public final class SyntaxHighlighter {
                 } while cursor.gotoNextSibling()
             }
         }
+        return captures
+    }
+
+    /// One line's spans from captures over it (or over more than it): clipped to the line, outer
+    /// before inner, later patterns winning.
+    private static func paint(_ lineRange: Range<Int>, captures all: [Capture], theme: SyntaxTheme) -> [StyleSpan] {
+        let length = lineRange.count
+        var captures: [Capture] = []
+        for capture in all where capture.lower < lineRange.upperBound && capture.upper > lineRange.lowerBound {
+            captures.append((max(capture.lower, lineRange.lowerBound), min(capture.upper, lineRange.upperBound), capture.pattern, capture.order, capture.name))
+        }
+        // One color slot per UTF-16 unit; captures paint in precedence order.
+        var paint = [Int16](repeating: -1, count: length)
+        var palette: [SIMD4<Float>] = []
+        var paletteIndex: [String: Int16] = [:]
         // Outer before inner (inner nodes win), then pattern order (later patterns win).
         captures.sort { a, b in
             let aStart = a.lower, bStart = b.lower
@@ -401,7 +438,6 @@ public final class SyntaxHighlighter {
             if value >= 0 { spans.append(StyleSpan(range: start..<end, color: palette[Int(value)])) }
             start = end
         }
-        lineCache[line] = spans
         return spans
     }
 
