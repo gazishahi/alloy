@@ -136,6 +136,10 @@ public final class DocumentLayout {
     public private(set) var hiddenLines: [ClosedRange<Int>] = []
     private var cache: [String: LaidOutLine] = [:]
     private var cacheOrder: [String] = []
+    /// Each line's layout until the text, folds or wrap width change: a frame asks for every
+    /// visible line (the text and the gutter both), and finding one by its text meant copying
+    /// it out of the rope and hashing it every time (2026-10-01).
+    private var byLine: [Int: LaidOutLine] = [:]
     static let cacheLimit = 1_000
 
     public init(text: Rope, font: CTFont, tabSize: Int = 4) {
@@ -172,6 +176,7 @@ public final class DocumentLayout {
             }
         }
         text = newText
+        byLine.removeAll(keepingCapacity: true)
         if rowIndex.lineCount != text.lineCount { rowIndex = RowIndex(lineCount: text.lineCount) }
         hideFoldedRows()
     }
@@ -191,6 +196,7 @@ public final class DocumentLayout {
         }
         for range in hiddenLines { for line in range where !Self.contains(merged, line) { rowIndex.set(line: line, rows: 1) } }
         hiddenLines = merged
+        byLine.removeAll(keepingCapacity: true)
         hideFoldedRows()
     }
 
@@ -218,6 +224,7 @@ public final class DocumentLayout {
         text = newText
         rowIndex = RowIndex(lineCount: text.lineCount)
         hiddenLines = []
+        byLine.removeAll(keepingCapacity: true)
     }
 
     public func setWrapWidth(_ width: CGFloat?) {
@@ -226,6 +233,7 @@ public final class DocumentLayout {
         wrapWidth = rounded
         cache.removeAll()
         cacheOrder.removeAll()
+        byLine.removeAll()
         rowIndex = RowIndex(lineCount: text.lineCount)
         hideFoldedRows()
     }
@@ -235,6 +243,7 @@ public final class DocumentLayout {
 
     /// A line's layout, measured now if it wasn't.
     public func layout(line: Int) -> LaidOutLine {
+        if let known = byLine[line] { return known }
         let string = text.substring(text.range(ofLine: line))
         let laid: LaidOutLine
         if let cached = cache[string] {
@@ -250,6 +259,8 @@ public final class DocumentLayout {
             }
         }
         rowIndex.set(line: line, rows: isHidden(line: line) ? 0 : laid.rows.count)
+        if byLine.count > 4_000 { byLine.removeAll(keepingCapacity: true) }
+        byLine[line] = laid
         return laid
     }
 

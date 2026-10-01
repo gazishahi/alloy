@@ -28,7 +28,7 @@ public struct RenderTheme: Sendable {
 }
 
 /// A color for a UTF-16 range of a line (syntax highlighting, step 4).
-public struct StyleSpan: Sendable {
+public struct StyleSpan: Sendable, Equatable {
     public var range: Range<Int>
     public var color: SIMD4<Float>
     public init(range: Range<Int>, color: SIMD4<Float>) {
@@ -251,6 +251,59 @@ public final class TextRenderer {
     }
 
     private var atlasRestarted = false
+
+    /// A line's glyphs, built once and placed by every frame that shows it: scrolling used to
+    /// rebuild every glyph on screen each frame (an atlas lookup, its subpixel position, its
+    /// color), most of a frame's CPU for an unchanged screen (2026-10-01, a 455-line TSX file
+    /// at 6 ms a frame). x is final; y is relative to the line's top, rounded when placed.
+    private struct LineGlyphs {
+        let layout: ObjectIdentifier
+        let spans: [StyleSpan]
+        let textColor: SIMD4<Float>
+        let scale: CGFloat
+        let generation: Int
+        /// Quads with `rect.y` holding only the atlas entry's offset.
+        var quads: [Quad] = []
+        /// Each quad's pen y below the line's top, in pixels, unrounded.
+        var penY: [Float] = []
+        /// Each row's baseline below the line's top, in points, and where its quads end.
+        var rows: [(baseline: CGFloat, end: Int)] = []
+    }
+    private var lineGlyphs: [Int: LineGlyphs] = [:]
+
+    private func cachedGlyphs(line: Int, laid: LaidOutLine, spans: [StyleSpan], frame: RenderFrame, layout: DocumentLayout) -> LineGlyphs {
+        let key = ObjectIdentifier(laid)
+        if let known = lineGlyphs[line], known.layout == key, known.scale == frame.scale, known.generation == atlas.generation,
+           known.textColor == frame.theme.text, known.spans == spans {
+            return known
+        }
+        let scale = frame.scale
+        var built = LineGlyphs(layout: key, spans: spans, textColor: frame.theme.text, scale: scale, generation: atlas.generation)
+        var spanIndex = 0
+        for (index, row) in laid.rows.enumerated() {
+            let baseline = CGFloat(index) * layout.lineHeight + layout.ascent
+            for run in row.runs {
+                for g in 0..<run.glyphs.count {
+                    let penX = (layout.insets.width + run.positions[g].x) * scale
+                    let snappedX = floor(penX)
+                    let subpixel = min(GlyphAtlas.subpixelSteps - 1, Int((penX - snappedX) * CGFloat(GlyphAtlas.subpixelSteps)))
+                    guard let entry = atlas.entry(font: run.font, glyph: run.glyphs[g], subpixel: subpixel, scale: scale, isColor: run.isColor),
+                          entry.region.width > 0 else { continue }
+                    var color = frame.theme.text
+                    let at = run.indices[g]
+                    while spanIndex < spans.count, spans[spanIndex].range.upperBound <= at { spanIndex += 1 }
+                    if spanIndex < spans.count, spans[spanIndex].range.contains(at) { color = spans[spanIndex].color }
+                    built.quads.append(Quad(rect: [Float(snappedX + entry.offset.x), Float(entry.offset.y), Float(entry.region.width), Float(entry.region.height)],
+                                            uv: [Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)],
+                                            color: color, kind: entry.isColor ? 2 : 1))
+                    built.penY.append(Float((baseline - run.positions[g].y) * scale))
+                }
+            }
+            spanIndex = 0
+            built.rows.append((baseline, built.quads.count))
+        }
+        return built
+    }
     private var ring: [MTLBuffer] = []
     private var ringIndex = 0
     private let framesInFlight = DispatchSemaphore(value: 3)
@@ -274,6 +327,9 @@ public final class TextRenderer {
         var underlines: [Quad] = []
         let lines = layout.visibleLines(from: frame.scrollY, to: frame.scrollY + frame.size.height)
         lastStats.visibleLines = lines.count
+        // Only the lines on screen keep their glyphs.
+        var usedGlyphs: [Int: LineGlyphs] = [:]
+        defer { lineGlyphs = usedGlyphs }
         let text = layout.text
         let lineHeight = layout.lineHeight
         let viewportWidth = frame.size.width
@@ -293,14 +349,25 @@ public final class TextRenderer {
 
         // Only the decorations on screen, found once a frame: every line used to test every one
         // (a find with thousands of matches, times each visible line).
+        // Each visible line's start, from the one before it: the rope finds a line by scanning
+        // its leaf, and asking for every line on screen each frame was a fifth of building one.
+        var lineStarts: [Int] = []
+        lineStarts.reserveCapacity(lines.count)
+        for (index, entry) in lines.enumerated() {
+            if index > 0, lines[index - 1].line + 1 == entry.line {
+                lineStarts.append(lineStarts[index - 1] + lines[index - 1].layout.text.utf16.count + 1)
+            } else {
+                lineStarts.append(text.offset(ofLine: entry.line))
+            }
+        }
         var onScreen: [Decoration] = []
-        if let first = lines.first, let last = lines.last {
-            let visible = text.offset(ofLine: first.line)..<(text.offset(ofLine: last.line) + last.layout.text.utf16.count)
+        if let first = lineStarts.first, let lastStart = lineStarts.last, let last = lines.last {
+            let visible = first..<(lastStart + last.layout.text.utf16.count)
             onScreen = frame.decorations.filter { $0.range.lowerBound <= visible.upperBound && $0.range.upperBound >= visible.lowerBound }
         }
 
-        for (line, top, laid) in lines {
-            let lineStart = text.offset(ofLine: line)
+        for (position, (line, top, laid)) in lines.enumerated() {
+            let lineStart = lineStarts[position]
             let lineRange = lineStart..<(lineStart + laid.text.utf16.count)
             let spans = frame.styles?(line) ?? []
             if let tint = frame.lineBackground?(line) {
@@ -351,31 +418,20 @@ public final class TextRenderer {
                 }
             }
 
-            // Glyphs.
-            var spanIndex = 0
-            for (index, row) in laid.rows.enumerated() {
-                let baseline = top + CGFloat(index) * lineHeight + layout.ascent
+            // Glyphs: the line's own, built when it changed, placed for this frame's scroll.
+            let built = cachedGlyphs(line: line, laid: laid, spans: spans, frame: frame, layout: layout)
+            usedGlyphs[line] = built
+            let lineTop = Float((top - frame.scrollY) * scale)
+            var start = 0
+            for row in built.rows {
+                defer { start = row.end }
+                let baseline = top + row.baseline
                 guard baseline - frame.scrollY > -lineHeight, baseline - frame.scrollY < frame.size.height + lineHeight else { continue }
-                for run in row.runs {
-                    for g in 0..<run.glyphs.count {
-                        let penX = (layout.insets.width + run.positions[g].x) * scale
-                        let penY = ((baseline - frame.scrollY) - run.positions[g].y) * scale
-                        let snappedX = floor(penX)
-                        let subpixel = min(GlyphAtlas.subpixelSteps - 1, Int((penX - snappedX) * CGFloat(GlyphAtlas.subpixelSteps)))
-                        guard let entry = atlas.entry(font: run.font, glyph: run.glyphs[g], subpixel: subpixel, scale: scale, isColor: run.isColor),
-                              entry.region.width > 0 else { continue }
-                        var color = frame.theme.text
-                        let at = run.indices[g]
-                        while spanIndex < spans.count, spans[spanIndex].range.upperBound <= at { spanIndex += 1 }
-                        if spanIndex < spans.count, spans[spanIndex].range.contains(at) { color = spans[spanIndex].color }
-                        let x = Float(snappedX + entry.offset.x)
-                        let y = Float(penY.rounded() + entry.offset.y)
-                        glyphs.append(Quad(rect: [x, y, Float(entry.region.width), Float(entry.region.height)],
-                                           uv: [Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)],
-                                           color: color, kind: entry.isColor ? 2 : 1))
-                    }
+                for index in start..<row.end {
+                    var quad = built.quads[index]
+                    quad.rect.y += (lineTop + built.penY[index]).rounded()
+                    glyphs.append(quad)
                 }
-                spanIndex = 0
             }
 
             // A suffix after the line's last row, on its pill.

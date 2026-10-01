@@ -55,8 +55,23 @@ final class GlyphAtlas {
 
     var count: Int { entries.count }
 
+    /// Each font's name and size, asked of CoreText once: copying and bridging the name for
+    /// every glyph of every frame was a tenth of a scrolling frame (2026-10-01). The fonts are
+    /// held, so an address can't be reused by another font while it's a key.
+    private var fontKeys: [ObjectIdentifier: (font: CTFont, name: String, size: CGFloat)] = [:]
+
+    private func fontKey(_ font: CTFont) -> (name: String, size: CGFloat) {
+        let id = ObjectIdentifier(font)
+        if let known = fontKeys[id] { return (known.name, known.size) }
+        if fontKeys.count > 64 { fontKeys.removeAll() }
+        let name = CTFontCopyPostScriptName(font) as String, size = CTFontGetSize(font)
+        fontKeys[id] = (font, name, size)
+        return (name, size)
+    }
+
     func entry(font: CTFont, glyph: CGGlyph, subpixel: Int, scale: CGFloat, isColor: Bool) -> AtlasEntry? {
-        let key = Key(font: CTFontCopyPostScriptName(font) as String, pointSize: CTFontGetSize(font), glyph: glyph, subpixel: subpixel, scale: scale)
+        let (name, pointSize) = fontKey(font)
+        let key = Key(font: name, pointSize: pointSize, glyph: glyph, subpixel: subpixel, scale: scale)
         if let cached = entries[key] { return cached }
         var glyphCopy = glyph
         var bounds = CGRect.zero

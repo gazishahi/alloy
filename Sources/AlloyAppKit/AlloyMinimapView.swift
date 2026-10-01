@@ -12,7 +12,7 @@ public final class AlloyMinimapView: NSView {
     weak var editor: AlloyEditorView?
     public var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
     /// The mark over the part of the document on screen.
-    public var viewportColor = NSColor.labelColor.withAlphaComponent(0.08) { didSet { needsDisplay = true } }
+    public var viewportColor = NSColor.labelColor.withAlphaComponent(0.08) { didSet { layoutTiles() } }
     /// Points per line, and per character across.
     static let lineHeight: CGFloat = 2
     static let characterWidth: CGFloat = 1
@@ -35,22 +35,142 @@ public final class AlloyMinimapView: NSView {
     public override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
         bounds.fill()
-        guard let editor, let context = NSGraphicsContext.current?.cgContext else { return }
-        let text = editor.buffer.text
+    }
+
+    // MARK: Tiles
+
+    /// The lines are drawn in tiles that scrolling only moves, and the mark over what's on
+    /// screen is a layer of its own: drawing every line the minimap shows on every frame of a
+    /// scroll (about 470 at full screen, each copied out, colored, and searched character by
+    /// character) was 70% of the main thread scrolling a TSX file, and more the taller the
+    /// window (2026-10-01, the owner's Khidma files).
+    static let tileLines = 64
+
+    private final class Tile: CALayer {
+        var index = 0
+    }
+
+    @MainActor private final class TileDrawer: NSObject, @preconcurrency CALayerDelegate {
+        weak var minimap: AlloyMinimapView?
+        func draw(_ layer: CALayer, in context: CGContext) {
+            guard let tile = layer as? Tile else { return }
+            minimap?.drawTile(tile, in: context)
+        }
+        func action(for layer: CALayer, forKey event: String) -> CAAction? { NSNull() }
+    }
+
+    private let drawer = TileDrawer()
+    private var tiles: [Int: Tile] = [:]
+    private var spareTiles: [Tile] = []
+    private let viewportMark: CALayer = {
+        let layer = CALayer()
+        layer.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "backgroundColor": NSNull(), "hidden": NSNull()]
+        layer.zPosition = 1
+        return layer
+    }()
+
+    // Layer-backed from the start (see AlloyGutterView: turning it on later recursed).
+    public override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+
+    /// What it shows changed (the text, its colors, the marks, the theme): every tile again.
+    public override var needsDisplay: Bool {
+        didSet {
+            guard needsDisplay else { return }
+            for tile in tiles.values { tile.setNeedsDisplay() }
+            layoutTiles()
+        }
+    }
+
+    public override func layout() {
+        super.layout()
+        layoutTiles()
+    }
+
+    // Tiles aren't laid out while hidden.
+    public override func viewDidUnhide() {
+        super.viewDidUnhide()
+        layoutTiles()
+    }
+
+    /// Follows a scroll: tiles and the mark move; only tiles coming into view are drawn.
+    public func scrolled() { layoutTiles() }
+
+    func layoutTiles() {
+        guard let editor, let host = layer, !isHiddenOrHasHiddenAncestor else { return }
+        drawer.minimap = self
         let first = firstLine(editor: editor)
-        let last = min(text.lineCount - 1, first + Int(bounds.height / Self.lineHeight) + 1)
-        guard first <= last else { return }
+        let shown = Int(bounds.height / Self.lineHeight) + 1
+        let lineCount = editor.buffer.text.lineCount
+        let lowest = first / Self.tileLines
+        let highest = max(lowest, min(lineCount - 1, first + shown) / Self.tileLines)
+        for (index, tile) in tiles where index < lowest || index > highest {
+            tile.isHidden = true
+            spareTiles.append(tile)
+            tiles[index] = nil
+        }
+        let scale = window?.backingScaleFactor ?? 2
+        let height = CGFloat(Self.tileLines) * Self.lineHeight
+        for index in lowest...highest {
+            let tile: Tile
+            if let placed = tiles[index] {
+                tile = placed
+            } else {
+                tile = spareTiles.popLast() ?? {
+                    let made = Tile()
+                    made.delegate = drawer
+                    made.isOpaque = false
+                    host.addSublayer(made)
+                    return made
+                }()
+                tile.index = index
+                tile.isHidden = false
+                tile.setNeedsDisplay()
+                tiles[index] = tile
+            }
+            if tile.contentsScale != scale { tile.contentsScale = scale; tile.setNeedsDisplay() }
+            let frame = CGRect(x: 0, y: CGFloat(index * Self.tileLines - first) * Self.lineHeight, width: bounds.width, height: height)
+            if tile.frame != frame {
+                if tile.frame.width != frame.width { tile.setNeedsDisplay() }
+                tile.frame = frame
+            }
+        }
+        // The part on screen.
+        if viewportMark.superlayer !== host { host.addSublayer(viewportMark) }
+        let layout = editor.documentLayout
+        let viewport = editor.viewport
+        let top = layout.line(atY: viewport.minY).line, bottom = layout.line(atY: viewport.maxY).line
+        viewportMark.frame = CGRect(x: 0, y: CGFloat(top - first) * Self.lineHeight, width: bounds.width, height: CGFloat(max(1, bottom - top + 1)) * Self.lineHeight)
+        viewportMark.backgroundColor = viewportColor.cgColor
+    }
+
+    private func drawTile(_ tile: Tile, in context: CGContext) {
+        guard let editor else { return }
+        let text = editor.buffer.text
+        let firstLine = tile.index * Self.tileLines
+        let lastLine = min(text.lineCount - 1, firstLine + Self.tileLines - 1)
+        guard firstLine <= lastLine else { return }
+        // The tile's colors in one query, not one a line.
+        editor.prepareStyles?(firstLine..<(lastLine + 1))
         let plain = editor.theme.text
         let maxColumns = Int((bounds.width - Self.inset * 2) / Self.characterWidth)
-        for line in first...last {
-            let y = CGFloat(line - first) * Self.lineHeight
-            let lineText = text.substring(text.range(ofLine: line))
-            let utf16 = Array(lineText.utf16)
-            guard !utf16.isEmpty else { continue }
+        var lineStart = text.offset(ofLine: firstLine)
+        for line in firstLine...lastLine {
+            let y = CGFloat(line - firstLine) * Self.lineHeight
+            let lineEnd = line + 1 < text.lineCount ? text.offset(ofLine: line + 1) - 1 : text.utf16Count
+            defer { lineStart = lineEnd + 1 }
+            guard lineEnd > lineStart else { continue }
+            let utf16 = text.substring(lineStart..<min(lineEnd, lineStart + maxColumns * 2)).utf16
             let spans = editor.styles?(line) ?? []
-            // Runs of non-space characters, each in its span's color.
-            var column = 0, runStart = -1, runColor = plain
-            func color(at index: Int) -> SIMD4<Float> { spans.last { $0.range.contains(index) }?.color ?? plain }
+            // Runs of non-space characters, each in its span's color; spans are in order.
+            var column = 0, runStart = -1, runColor = plain, spanIndex = 0
             func flush(_ end: Int) {
                 guard runStart >= 0, runStart < maxColumns else { runStart = -1; return }
                 let width = CGFloat(min(end, maxColumns) - runStart) * Self.characterWidth
@@ -58,10 +178,13 @@ public final class AlloyMinimapView: NSView {
                 context.fill(CGRect(x: Self.inset + CGFloat(runStart) * Self.characterWidth, y: y, width: width, height: Self.lineHeight - 0.5))
                 runStart = -1
             }
-            for (index, unit) in utf16.enumerated() {
+            var index = 0
+            for unit in utf16 {
+                defer { index += 1 }
                 if unit == 0x09 { flush(column); column += 4 - column % 4; continue }
                 if unit == 0x20 { flush(column); column += 1; continue }
-                let spanColor = color(at: index)
+                while spanIndex < spans.count, spans[spanIndex].range.upperBound <= index { spanIndex += 1 }
+                let spanColor = spanIndex < spans.count && spans[spanIndex].range.contains(index) ? spans[spanIndex].color : plain
                 if runStart >= 0, spanColor != runColor { flush(column) }
                 if runStart < 0 { runStart = column; runColor = spanColor }
                 column += 1
@@ -71,20 +194,13 @@ public final class AlloyMinimapView: NSView {
         }
         // Find matches and other background marks: a mark at the right edge, so a file with many
         // doesn't turn to stripes.
-        for decoration in editor.decorations where decoration.style == .background {
+        let tileRange = text.offset(ofLine: firstLine)..<(lastLine + 1 < text.lineCount ? text.offset(ofLine: lastLine + 1) : text.utf16Count + 1)
+        for decoration in editor.decorations where decoration.style == .background && tileRange.contains(decoration.range.lowerBound) {
             let line = text.line(containing: decoration.range.lowerBound)
-            guard line >= first, line <= last else { continue }
             let c = decoration.color
             context.setFillColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
-            context.fill(CGRect(x: bounds.width - 5, y: CGFloat(line - first) * Self.lineHeight - 0.5, width: 4, height: Self.lineHeight + 1))
+            context.fill(CGRect(x: bounds.width - 5, y: CGFloat(line - firstLine) * Self.lineHeight - 0.5, width: 4, height: Self.lineHeight + 1))
         }
-        // The part on screen.
-        let layout = editor.documentLayout
-        let viewport = editor.viewport
-        let top = layout.line(atY: viewport.minY).line, bottom = layout.line(atY: viewport.maxY).line
-        let rect = CGRect(x: 0, y: CGFloat(top - first) * Self.lineHeight, width: bounds.width, height: CGFloat(max(1, bottom - top + 1)) * Self.lineHeight)
-        viewportColor.setFill()
-        rect.fill()
     }
 
     // MARK: Scrolling from here

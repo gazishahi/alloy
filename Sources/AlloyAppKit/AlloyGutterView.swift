@@ -104,18 +104,143 @@ public final class AlloyGutterView: NSView {
     public override func draw(_ dirtyRect: NSRect) {
         backgroundColor.setFill()
         bounds.fill()
-        guard let editor else { return }
-        let layout = editor.documentLayout
-        // Every line the editor draws, insets included, so numbers flow under floating chrome
-        // with their text. The clip view's top edge in the gutter's coordinates.
+    }
+
+    // MARK: Tiles
+
+    /// The numbers and marks are drawn in tiles of the document, which scrolling only moves:
+    /// redrawing the whole gutter every frame of a scroll was most of what Core Animation
+    /// committed (2026-10-01, a third of a scrolling frame). A tile is drawn when it comes into
+    /// view and when what it shows changes (`needsDisplay`, as before).
+    static let tileHeight: CGFloat = 512
+
+    /// A tile is a plain layer, not a view: AppKit redraws a layer-backed view whose visible
+    /// part changes, which a tile moving under the gutter's edge does every frame.
+    private final class Tile: CALayer {
+        var index = 0
+        /// The first and last lines it drew and where they were: when rows are measured and the
+        /// document's height changes, only a tile whose lines moved draws again.
+        var drawn: (first: Int, firstY: CGFloat, last: Int, lastY: CGFloat)?
+    }
+
+    /// Draws a tile's layer through the gutter (a view can't be another layer's delegate).
+    // Layers display on the main thread, from Core Animation's commit.
+    @MainActor private final class TileDrawer: NSObject, @preconcurrency CALayerDelegate {
+        weak var gutter: AlloyGutterView?
+        func draw(_ layer: CALayer, in context: CGContext) {
+            guard let tile = layer as? Tile else { return }
+            gutter?.drawTile(tile, in: context)
+        }
+        // No animation when a tile moves or is shown.
+        func action(for layer: CALayer, forKey event: String) -> CAAction? { NSNull() }
+    }
+
+    private let drawer = TileDrawer()
+    private var tiles: [Int: Tile] = [:]
+    private var spareTiles: [Tile] = []
+    /// The document's height when the tiles were last drawn: rows are measured as lines are
+    /// first drawn (a wrapped line takes more than one), which moves every line after them.
+    private var drawnContentHeight: CGFloat = -1
+
+    // Layer-backed from the start: turning it on later marks the view as needing display,
+    // which lays out the tiles, which turned it on again (a gutter outside a window has no
+    // layer yet: Review's diff view, 2026-10-01, a stack overflow).
+    public override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+
+    public override var needsDisplay: Bool {
+        didSet {
+            guard needsDisplay else { return }
+            for tile in tiles.values { tile.setNeedsDisplay() }
+            layoutTiles()
+        }
+    }
+
+    public override func layout() {
+        super.layout()
+        layoutTiles()
+    }
+
+    /// Places the tiles the viewport (and half a screen either side) needs, drawing only new ones.
+    func layoutTiles() {
+        guard let editor, let host = layer else { return }
         let viewport = editor.drawingRect
         let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let margin = viewport.height / 2
+        let layout = editor.documentLayout
+        let height = layout.contentHeight
+        if height != drawnContentHeight {
+            drawnContentHeight = height
+            for tile in tiles.values {
+                guard let drawn = tile.drawn else { continue }
+                if layout.y(ofLine: drawn.first) != drawn.firstY || layout.y(ofLine: drawn.last) != drawn.lastY { tile.setNeedsDisplay() }
+            }
+        }
+        let first = max(0, Int(floor((viewport.minY - margin) / Self.tileHeight)))
+        let last = max(first, Int(floor((viewport.maxY + margin) / Self.tileHeight)))
+        for (index, tile) in tiles where index < first || index > last {
+            tile.isHidden = true
+            spareTiles.append(tile)
+            tiles[index] = nil
+        }
+        let scale = window?.backingScaleFactor ?? 2
+        drawer.gutter = self
+        for index in first...last {
+            let tile: Tile
+            if let placed = tiles[index] {
+                tile = placed
+            } else {
+                tile = spareTiles.popLast() ?? {
+                    let made = Tile()
+                    made.delegate = drawer
+                    made.isOpaque = false
+                    host.addSublayer(made)
+                    return made
+                }()
+                tile.index = index
+                tile.isHidden = false
+                tile.setNeedsDisplay()
+                tiles[index] = tile
+            }
+            if tile.contentsScale != scale { tile.contentsScale = scale; tile.setNeedsDisplay() }
+            // On a device pixel, so the numbers stay sharp at rest. The host layer's geometry
+            // is the view's (flipped), as AppKit sets it up.
+            let y = ((top + CGFloat(index) * Self.tileHeight - viewport.minY) * scale).rounded() / scale
+            let frame = CGRect(x: 0, y: y, width: bounds.width, height: Self.tileHeight)
+            if tile.frame != frame {
+                if tile.frame.width != frame.width { tile.setNeedsDisplay() }
+                tile.frame = frame
+            }
+        }
+    }
+
+    /// Follows a scroll: tiles move; only the ones coming into view are drawn.
+    public func scrolled() { layoutTiles() }
+
+    private func drawTile(_ tile: Tile, in context: CGContext) {
+        guard let editor else { return }
+        let layout = editor.documentLayout
+        let docTop = CGFloat(tile.index) * Self.tileHeight
+        // Already top-down: the gutter's layer geometry is flipped, as its view is.
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.current = previous }
         context.saveGState()
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         context.setFillColor(numberColor.cgColor)
-        for (line, y, laid) in layout.visibleLines(from: viewport.minY, to: viewport.maxY) {
-            let rowTop = top + (y - viewport.minY)
+        let lines = layout.visibleLines(from: docTop, to: docTop + Self.tileHeight)
+        if let first = lines.first, let last = lines.last {
+            tile.drawn = (first.line, layout.y(ofLine: first.line), last.line, layout.y(ofLine: last.line))
+        }
+        for (line, y, laid) in lines {
+            let rowTop = y - docTop
             let lineHeight = layout.lineHeight
             let height = CGFloat(laid.rows.count) * lineHeight
             // On the text's baseline (row top + the text font's ascent), right-aligned.
@@ -161,6 +286,7 @@ public final class AlloyGutterView: NSView {
         }
         context.restoreGState()
     }
+
 
     /// Xcode's breakpoint shape: a rounded rectangle whose right end points at the text.
     static func tagPath(_ rect: NSRect) -> NSBezierPath {

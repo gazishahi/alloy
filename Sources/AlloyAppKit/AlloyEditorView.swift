@@ -17,8 +17,14 @@ public final class AlloyEditorView: NSView {
     public let scrollView = NSScrollView()
     public private(set) var buffer: TextBuffer
     public private(set) var documentLayout: DocumentLayout
-    public var theme: RenderTheme = .light { didSet { setNeedsRender() } }
-    public var styles: ((Int) -> [StyleSpan])? { didSet { setNeedsRender() } }
+    public var theme: RenderTheme = .light { didSet { setNeedsRender(); minimap.needsDisplay = true } }
+    public var styles: ((Int) -> [StyleSpan])? { didSet { stylesChanged() } }
+
+    /// The colors `styles` gives changed (a parse finished): the text and the minimap again.
+    public func stylesChanged() {
+        setNeedsRender()
+        minimap.needsDisplay = true
+    }
     /// Told the lines about to be drawn before `styles` is asked for each: a highlighter colors
     /// the new ones in one query rather than one each (`SyntaxHighlighter.prepare(lines:)`).
     public var prepareStyles: ((Range<Int>) -> Void)?
@@ -177,6 +183,9 @@ public final class AlloyEditorView: NSView {
         restoreFolds()
         updateDocumentHeight()
         setNeedsRender()
+        // Their tiles are kept across scrolls, so another document has to ask for them again.
+        gutter.needsDisplay = true
+        minimap.needsDisplay = true
         scheduleFoldRegions()
     }
 
@@ -390,8 +399,10 @@ public final class AlloyEditorView: NSView {
     @objc private func scrolled() {
         onPointerExit?()
         setNeedsRender()
-        gutter.needsDisplay = true
-        if !minimap.isHiddenOrHasHiddenAncestor { minimap.needsDisplay = true }
+        // Moves the gutter's tiles; it doesn't redraw.
+        gutter.scrolled()
+        // Moves the minimap's tiles and mark; it doesn't redraw.
+        minimap.scrolled()
     }
 
     /// Selects, as the user would (the delegate hears about it); doesn't scroll.
@@ -407,6 +418,7 @@ public final class AlloyEditorView: NSView {
         scheduleFoldRegions()
         updateDocumentHeight()
         gutter.needsDisplay = true
+        minimap.needsDisplay = true
         setNeedsRender()
     }
 
