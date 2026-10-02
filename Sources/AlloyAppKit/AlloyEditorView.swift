@@ -257,7 +257,7 @@ public final class AlloyEditorView: NSView {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.caretOn.toggle()
-                self.setNeedsRender()
+                self.renderBlink()
                 self.scheduleBlink(after: next, then: interval)
             }
         }
@@ -287,7 +287,29 @@ public final class AlloyEditorView: NSView {
     public func setNeedsRender() {
         needsRender = true
         wake()
-        guard !immediateRenderScheduled, CACurrentMediaTime() - lastRenderTime > displayInterval * 1.5 else { return }
+        guard CACurrentMediaTime() - lastRenderTime > displayInterval * 1.5 else { return }
+        scheduleImmediateRender()
+    }
+
+    /// The caret's blink: one frame, drawn without waking the display link. Waking it kept it
+    /// running 30 idle ticks after every blink, about 94% of the time in a focused, idle editor
+    /// (57 wakeups a second where 2 are needed; 2026-09-30 audit, CON-7). While the link runs
+    /// (scrolling, typing), its next tick draws the blink anyway.
+    func renderBlink() {
+        needsRender = true
+        guard displayLink?.isPaused != false else { return }
+        scheduleImmediateRender()
+    }
+
+    /// For tests: whether the display link is paused (nil without one), and whether a frame is
+    /// still waiting to be drawn.
+    var displayLinkIsPaused: Bool? { displayLink?.isPaused }
+    var hasPendingRender: Bool { needsRender }
+    func pauseDisplayLinkForTesting() { displayLink?.isPaused = true }
+
+    /// Draws as soon as this turn of the run loop ends, without the display link.
+    private func scheduleImmediateRender() {
+        guard !immediateRenderScheduled else { return }
         immediateRenderScheduled = true
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {

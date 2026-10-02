@@ -293,8 +293,8 @@ public final class TextRenderer {
                     let at = run.indices[g]
                     while spanIndex < spans.count, spans[spanIndex].range.upperBound <= at { spanIndex += 1 }
                     if spanIndex < spans.count, spans[spanIndex].range.contains(at) { color = spans[spanIndex].color }
-                    built.quads.append(Quad(rect: [Float(snappedX + entry.offset.x), Float(entry.offset.y), Float(entry.region.width), Float(entry.region.height)],
-                                            uv: [Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)],
+                    built.quads.append(Quad(rect: SIMD4(Float(snappedX + entry.offset.x), Float(entry.offset.y), Float(entry.region.width), Float(entry.region.height)),
+                                            uv: SIMD4(Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)),
                                             color: color, kind: entry.isColor ? 2 : 1))
                     built.penY.append(Float((baseline - run.positions[g].y) * scale))
                 }
@@ -338,7 +338,7 @@ public final class TextRenderer {
             // Snap to device pixels so edges are crisp.
             let x0 = (x * scale).rounded(), y0 = ((y - frame.scrollY) * scale).rounded()
             let x1 = ((x + w) * scale).rounded(), y1 = ((y - frame.scrollY + h) * scale).rounded()
-            return [Float(x0), Float(y0), Float(max(1, x1 - x0)), Float(max(1, y1 - y0))]
+            return SIMD4(Float(x0), Float(y0), Float(max(1, x1 - x0)), Float(max(1, y1 - y0)))
         }
 
         // The current-line band: where a caret with no selection sits.
@@ -452,8 +452,8 @@ public final class TextRenderer {
                         let subpixel = min(GlyphAtlas.subpixelSteps - 1, Int((penX - snappedX) * CGFloat(GlyphAtlas.subpixelSteps)))
                         guard let entry = atlas.entry(font: run.font, glyph: run.glyphs[g], subpixel: subpixel, scale: scale, isColor: run.isColor),
                               entry.region.width > 0 else { continue }
-                        glyphs.append(Quad(rect: [Float(snappedX + entry.offset.x), Float(penY.rounded() + entry.offset.y), Float(entry.region.width), Float(entry.region.height)],
-                                           uv: [Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)],
+                        glyphs.append(Quad(rect: SIMD4(Float(snappedX + entry.offset.x), Float(penY.rounded() + entry.offset.y), Float(entry.region.width), Float(entry.region.height)),
+                                           uv: SIMD4(Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)),
                                            color: suffix.color, kind: entry.isColor ? 2 : 1))
                     }
                 }

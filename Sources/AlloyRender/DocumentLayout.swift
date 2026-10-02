@@ -33,7 +33,10 @@ public final class LaidOutLine {
     init(text: String, font: CTFont, tabWidth: CGFloat, wrapWidth: CGFloat?) {
         self.text = text
         let attributes = Self.attributes(font: font, tabWidth: tabWidth)
-        let attributed = NSAttributedString(string: text, attributes: attributes)
+        // A UTF-16 string, made once: from a Swift string (UTF-8 inside), CoreText's character
+        // and offset reads were converted and copied again for each row of a wrapped line
+        // (2026-10-01, Review's 12,000-character HTML lines: 40% of the main thread's work).
+        let attributed = NSAttributedString(string: NSMutableString(string: text) as String, attributes: attributes)
         let typesetter = CTTypesetterCreateWithAttributedString(attributed)
         let length = text.utf16.count
         var rows: [LayoutRow] = []

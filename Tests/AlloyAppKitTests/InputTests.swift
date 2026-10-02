@@ -314,3 +314,27 @@ final class RevealTests: XCTestCase {
         window.orderOut(nil)
     }
 }
+
+/// CON-7 (2026-09-30 audit): the caret's blink draws its frame without waking the display link,
+/// which ran about 94% of the time in an idle, focused editor because each blink woke it.
+@MainActor
+final class CaretBlinkWakeTests: XCTestCase {
+    func testABlinkDrawsWithoutWakingTheDisplayLink() throws {
+        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "no Metal device (a CI runner without a GPU)")
+        let editor = try AlloyEditorView(buffer: TextBuffer("let value = 1\n"), font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) as CTFont)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = editor
+        window.layoutIfNeeded()
+        editor.layout()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        try XCTSkipIf(editor.displayLinkIsPaused == nil, "no display link without a screen")
+        editor.pauseDisplayLinkForTesting()
+        editor.renderBlink()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(editor.displayLinkIsPaused, true, "the link stays paused")
+        XCTAssertFalse(editor.hasPendingRender, "and the blink's frame was drawn")
+        editor.setNeedsRender()
+        XCTAssertEqual(editor.displayLinkIsPaused, false, "anything else still wakes it")
+    }
+}
