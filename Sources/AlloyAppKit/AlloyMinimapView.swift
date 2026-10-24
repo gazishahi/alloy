@@ -184,7 +184,7 @@ public final class AlloyMinimapView: NSView {
                 if unit == 0x09 { flush(column); column += 4 - column % 4; continue }
                 if unit == 0x20 { flush(column); column += 1; continue }
                 while spanIndex < spans.count, spans[spanIndex].range.upperBound <= index { spanIndex += 1 }
-                let spanColor = spanIndex < spans.count && spans[spanIndex].range.contains(index) ? spans[spanIndex].color : plain
+                let spanColor = spanIndex < spans.count && spans[spanIndex].range.contains(index) ? spans[spanIndex].color ?? plain : plain
                 if runStart >= 0, spanColor != runColor { flush(column) }
                 if runStart < 0 { runStart = column; runColor = spanColor }
                 column += 1

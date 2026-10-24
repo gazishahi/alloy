@@ -34,6 +34,8 @@ final class GlyphAtlas {
     }
 
     private var entries: [Key: AtlasEntry] = [:]
+    /// Client images (a typeset formula), by the client's key.
+    private var images: [String: AtlasEntry] = [:]
     private var penX = 1
     private var penY = 1
     private var shelfHeight = 0
@@ -92,24 +94,7 @@ final class GlyphAtlas {
         let height = Int(maxY - minY)
         guard width < size, height < size else { return nil }
 
-        if penX + width + 1 > size {
-            penX = 1
-            penY += shelfHeight + 1
-            shelfHeight = 0
-        }
-        if penY + height + 1 > size {
-            // Full: twice the size if it can grow, else start over. Either way the text on
-            // screen is re-rasterized on the next frame.
-            if size < Self.maximumSize {
-                size *= 2
-                texture = Self.makeTexture(device: device, size: size)
-            }
-            entries.removeAll()
-            penX = 1
-            penY = 1
-            shelfHeight = 0
-            generation += 1
-        }
+        allocate(width: width, height: height)
 
         let bytesPerRow = width * 4
         var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
@@ -133,6 +118,61 @@ final class GlyphAtlas {
         let entry = AtlasEntry(region: CGRect(x: penX, y: penY, width: width, height: height),
                                offset: CGPoint(x: minX - shift, y: -maxY), isColor: isColor)
         entries[key] = entry
+        penX += width + 1
+        shelfHeight = max(shelfHeight, height)
+        return entry
+    }
+
+    /// Makes room for a bitmap at the pen: the next shelf, or a bigger atlas (or a fresh one).
+    private func allocate(width: Int, height: Int) {
+        if penX + width + 1 > size {
+            penX = 1
+            penY += shelfHeight + 1
+            shelfHeight = 0
+        }
+        if penY + height + 1 > size {
+            // Full: twice the size if it can grow, else start over. Either way the text on
+            // screen is re-rasterized on the next frame.
+            if size < Self.maximumSize {
+                size *= 2
+                texture = Self.makeTexture(device: device, size: size)
+            }
+            entries.removeAll()
+            images.removeAll()
+            penX = 1
+            penY = 1
+            shelfHeight = 0
+            generation += 1
+        }
+    }
+
+    /// A client's image (drawn in its own colors), placed with its top `ascent` points above the
+    /// pen at the baseline. Pixels as given: the client renders at the screen's scale.
+    func entry(image: CGImage, key: String, ascent: CGFloat, scale: CGFloat) -> AtlasEntry? {
+        let full = key + "@\(scale)"
+        if let cached = images[full] { return cached }
+        let width = image.width, height = image.height
+        guard width > 0, height > 0, width + 2 < size || size < Self.maximumSize, height + 2 < Self.maximumSize, width + 2 < Self.maximumSize else { return nil }
+        while width + 2 >= size || height + 2 >= size {
+            size *= 2
+            texture = Self.makeTexture(device: device, size: size)
+            entries.removeAll()
+            images.removeAll()
+            penX = 1; penY = 1; shelfHeight = 0
+            generation += 1
+        }
+        allocate(width: width, height: height)
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        texture.replace(region: MTLRegionMake2D(penX, penY, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: bytesPerRow)
+        let entry = AtlasEntry(region: CGRect(x: penX, y: penY, width: width, height: height), offset: CGPoint(x: 0, y: -(ascent * scale).rounded()), isColor: true)
+        images[full] = entry
         penX += width + 1
         shelfHeight = max(shelfHeight, height)
         return entry

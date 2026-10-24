@@ -68,6 +68,12 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         return true
     }
 
+    /// A click into a window that isn't key (another app, a panel or another window had the
+    /// keyboard) places the caret as well as bringing the window forward, as a text view's
+    /// does. Without this AppKit used the click only to activate the window, and the caret
+    /// stayed put: clicking "didn't always work" (2026-10-23, the owner).
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     public override func resetCursorRects() {
         addCursorRect(visibleRect, cursor: .iBeam)
     }
@@ -142,7 +148,8 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         let goals = goalX ?? buffer.selections.map { layout.caretRect(at: $0.head).minX }
         move(extending: extending, keepsGoal: true) { s, index in
             let caret = layout.caretRect(at: extending || s.isCaret ? s.head : (direction < 0 ? s.range.lowerBound : s.range.upperBound))
-            let y = caret.midY + CGFloat(direction * rows) * layout.lineHeight
+            // Just past the caret's row, then plain rows more: rows can differ in height.
+            let y = (direction > 0 ? caret.maxY + 1 : caret.minY - 1) + CGFloat(direction * (rows - 1)) * layout.lineHeight
             if y < layout.insets.height { return 0 }
             if y > layout.contentHeight - layout.insets.height { return buffer.text.utf16Count }
             return layout.offset(at: CGPoint(x: goals[min(index, goals.count - 1)], y: y))
@@ -288,7 +295,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     private func addCarets(_ direction: Int) {
         let extra = buffer.selections.compactMap { s -> Selection? in
             let caret = layout.caretRect(at: s.head)
-            let y = caret.midY + CGFloat(direction) * layout.lineHeight
+            let y = direction > 0 ? caret.maxY + 1 : caret.minY - 1
             guard y > layout.insets.height, y < layout.contentHeight - layout.insets.height else { return nil }
             return Selection(caret: layout.offset(at: CGPoint(x: caret.minX, y: y)))
         }

@@ -1,17 +1,23 @@
-/// How many visual rows each line takes (1 unless it wraps), as a Fenwick tree: the row a line
-/// starts at, and the line at a given row, both in O(log n). This is what lets a 100,000-line
-/// file scroll without laying out every line: unmeasured lines count as one row until drawn.
+/// How tall each line is, in whole points (a line of code is one line height; one that wraps
+/// is several; a heading is taller), as a Fenwick tree: where a line starts, and the line at a
+/// given height, both in O(log n). This is what lets a 100,000-line file scroll without laying
+/// out every line: unmeasured lines count as `unit` (one plain row) until drawn. (Tests count
+/// in rows: a unit of 1.)
 struct RowIndex {
     private var tree: [Int]
     private(set) var rows: [Int]
+    /// What an unmeasured line counts as.
+    let unit: Int
 
-    init(lineCount: Int) {
-        rows = Array(repeating: 1, count: max(1, lineCount))
+    init(lineCount: Int, unit: Int = 1) {
+        self.unit = unit
+        rows = Array(repeating: unit, count: max(1, lineCount))
         tree = []
         rebuild()
     }
 
     init(rows: [Int]) {
+        unit = 1
         self.rows = rows.isEmpty ? [1] : rows
         tree = []
         rebuild()
@@ -79,11 +85,11 @@ struct RowIndex {
         let upper = min(rows.count, lower + oldCount)
         if upper - lower == newCount {
             // The common case (typing within lines): no lines come or go, so no rebuild.
-            for line in lower..<upper { set(line: line, rows: 1) }
+            for line in lower..<upper { set(line: line, rows: unit) }
             return
         }
-        rows.replaceSubrange(lower..<upper, with: Array(repeating: 1, count: newCount))
-        if rows.isEmpty { rows = [1] }
+        rows.replaceSubrange(lower..<upper, with: Array(repeating: unit, count: newCount))
+        if rows.isEmpty { rows = [unit] }
         rebuild()
     }
 }

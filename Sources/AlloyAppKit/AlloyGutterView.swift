@@ -241,13 +241,14 @@ public final class AlloyGutterView: NSView {
         }
         for (line, y, laid) in lines {
             let rowTop = y - docTop
-            let lineHeight = layout.lineHeight
-            let height = CGFloat(laid.rows.count) * lineHeight
+            // The first row's height and baseline: a heading's is taller than a line of code's.
+            let lineHeight = laid.rowHeights[0]
+            let height = laid.height
             // On the text's baseline (row top + the text font's ascent), right-aligned.
             if let label {
                 if let text = label(line), !text.isEmpty {
                     let (shaped, width) = shape(text)
-                    context.textPosition = CGPoint(x: bounds.width - width - 8, y: rowTop + layout.ascent)
+                    context.textPosition = CGPoint(x: bounds.width - width - 8, y: rowTop + laid.rowBaselines[0])
                     CTLineDraw(shaped, context)
                 }
             } else {
@@ -262,7 +263,7 @@ public final class AlloyGutterView: NSView {
                     if verified { color.setFill(); path.fill() } else { color.setStroke(); path.lineWidth = 1.5; path.stroke() }
                     context.setFillColor(verified ? NSColor.white.cgColor : numberColor.cgColor)
                 }
-                context.textPosition = CGPoint(x: bounds.width - width - right, y: rowTop + layout.ascent)
+                context.textPosition = CGPoint(x: bounds.width - width - right, y: rowTop + laid.rowBaselines[0])
                 CTLineDraw(shaped, context)
                 context.setFillColor(numberColor.cgColor)
             }

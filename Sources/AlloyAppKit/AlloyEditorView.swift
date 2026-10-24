@@ -19,6 +19,50 @@ public final class AlloyEditorView: NSView {
     public private(set) var documentLayout: DocumentLayout
     public var theme: RenderTheme = .light { didSet { setNeedsRender(); minimap.needsDisplay = true } }
     public var styles: ((Int) -> [StyleSpan])? { didSet { stylesChanged() } }
+    /// Markup each line hides unless a selection touches it (live Markdown's `**`, `#`, a link's
+    /// URL); see `DocumentLayout.concealment`. Nil: nothing hidden.
+    public var concealment: ((Int) -> [Range<Int>])? {
+        didSet {
+            documentLayout.concealment = concealment
+            updateRevealedLines()
+            updateDocumentHeight()
+            setNeedsRender()
+        }
+    }
+
+    /// Ranges each line draws as images (typeset formulas) unless a selection touches it; see
+    /// `DocumentLayout.replacements`. Nil: none.
+    public var inlineReplacements: ((Int) -> [InlineReplacement])? {
+        didSet {
+            documentLayout.replacements = inlineReplacements
+            updateRevealedLines()
+            updateDocumentHeight()
+            setNeedsRender()
+        }
+    }
+
+    /// The lines whose markup shows: every line a selection touches.
+    func updateRevealedLines() {
+        guard concealment != nil || inlineReplacements != nil else { documentLayout.revealedLines = []; return }
+        let text = buffer.text
+        var lines = Set<Int>()
+        for selection in buffer.selections {
+            let first = text.line(containing: selection.range.lowerBound), last = text.line(containing: selection.range.upperBound)
+            if last - first > 2_000 { lines.insert(text.line(containing: selection.head)); continue }
+            for line in first...last { lines.insert(line) }
+        }
+        documentLayout.revealedLines = lines
+    }
+
+    /// Font runs per line (prose in a reading font); see `DocumentLayout.fontSpans`. Nil: the
+    /// document's one font.
+    public var fontSpans: ((Int) -> [FontSpan])? {
+        didSet {
+            documentLayout.fontSpans = fontSpans
+            updateDocumentHeight()
+            setNeedsRender()
+        }
+    }
 
     /// The colors `styles` gives changed (a parse finished): the text and the minimap again.
     public func stylesChanged() {
@@ -42,6 +86,25 @@ public final class AlloyEditorView: NSView {
     public var foldedLineColor: SIMD4<Float> = [0.5, 0.5, 0.5, 0.12] { didSet { setNeedsRender() } }
     /// Wrap to the view's width (Make's default), or not.
     public var wrapsLines = true { didSet { updateWrapWidth() } }
+    /// The text set in a centered column this wide, for reading and writing prose; nil runs it
+    /// the full width.
+    public var readingColumnWidth: CGFloat? { didSet { if readingColumnWidth != oldValue { updateWrapWidth(); updateDocumentHeight(); setNeedsRender() } } }
+    /// Space above the first line and below the last, part of the document (so the scroller
+    /// counts it): a writer's typewriter margin lets the first and last lines reach mid-screen.
+    /// Nil is the standard margin.
+    public var documentPadding: CGFloat? {
+        didSet {
+            guard documentPadding != oldValue else { return }
+            documentLayout.insets.height = documentPadding ?? DocumentLayout.standardInsets.height
+            updateDocumentHeight()
+            setNeedsRender()
+        }
+    }
+    /// The lines drawn at full strength, the rest faded; nil draws every line alike.
+    public var focusedLines: ClosedRange<Int>? { didSet { if focusedLines != oldValue { setNeedsRender() } } }
+    /// The band across the caret's line (on by default).
+    public var highlightsCurrentLine = true { didSet { if highlightsCurrentLine != oldValue { setNeedsRender() } } }
+    private static let standardInset = DocumentLayout.standardInsets.width
     public weak var delegate: AlloyEditorDelegate?
     /// Marks to draw (diagnostics, a matched bracket).
     public var decorations: [Decoration] = [] { didSet { setNeedsRender(); minimap.needsDisplay = true } }
@@ -171,6 +234,7 @@ public final class AlloyEditorView: NSView {
 
     /// Shows another buffer (a tab switch).
     public func setBuffer(_ buffer: TextBuffer) {
+        anchorLine = nil
         // In the old buffer, where it was typed.
         documentView.endComposition()
         endSnippet()
@@ -180,6 +244,7 @@ public final class AlloyEditorView: NSView {
         self.buffer = buffer
         buffer.onChange = { [weak self] change in self?.textChanged(change) }
         documentLayout.reset(buffer.text)
+        updateRevealedLines()
         restoreFolds()
         updateDocumentHeight()
         setNeedsRender()
@@ -199,6 +264,7 @@ public final class AlloyEditorView: NSView {
         onTextChange?(change)
         snippetFollow(change)
         documentLayout.update(buffer.text, edits: change.edits)
+        updateRevealedLines()
         scheduleFoldRegions()
         updateDocumentHeight()
         restartBlink()
@@ -220,6 +286,8 @@ public final class AlloyEditorView: NSView {
 
     func selectionChanged() {
         if isExpandingSelection { isExpandingSelection = false } else { selectionHistory.removeAll() }
+        updateRevealedLines()
+        if concealment != nil || inlineReplacements != nil { updateDocumentHeight() }
         snippetCheckSelection()
         revealFoldedSelections()
         restartBlink()
@@ -398,6 +466,23 @@ public final class AlloyEditorView: NSView {
         setNeedsRender()
     }
 
+    /// A click in the scroll view's margin, above the first line or below the last (a writer's
+    /// typewriter margins, the space under a short file), places the caret at the nearest line,
+    /// as the text view would: the margin isn't the text view, so the click came up to here.
+    public override func mouseDown(with event: NSEvent) { textView.mouseDown(with: event) }
+    /// The scroll view's margin is its clip and background views (which turn away a first click
+    /// into a window that isn't key): the editor takes those clicks itself. The text, the
+    /// scrollers and anything else keep theirs.
+    public override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point), hit !== textView, !hit.isDescendant(of: textView), hit.isDescendant(of: scrollView),
+              !(scrollView.verticalScroller.map { hit.isDescendant(of: $0) } ?? false),
+              !(scrollView.horizontalScroller.map { hit.isDescendant(of: $0) } ?? false) else { return super.hitTest(point) }
+        return self
+    }
+    public override func mouseDragged(with event: NSEvent) { textView.mouseDragged(with: event) }
+    public override func mouseUp(with event: NSEvent) { textView.mouseUp(with: event) }
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         canvas.metalLayer.contentsScale = window?.backingScaleFactor ?? 2
@@ -405,11 +490,23 @@ public final class AlloyEditorView: NSView {
     }
 
     private func updateWrapWidth() {
-        let width = scrollView.contentView.bounds.width - documentLayout.insets.width * 2
+        let available = scrollView.contentView.bounds.width
+        let inset = readingColumnWidth.map { max(Self.standardInset, ((available - $0) / 2).rounded()) } ?? Self.standardInset
+        if documentLayout.insets.width != inset { documentLayout.insets.width = inset }
+        let width = available - documentLayout.insets.width * 2
         documentLayout.setWrapWidth(wrapsLines && width > 0 ? width : nil)
     }
 
+    /// The content height the gutter last placed its numbers for.
+    private var gutterContentHeight: CGFloat = -1
+
     func updateDocumentHeight() {
+        // Lines measured taller (a wrap, a heading) move the numbers after them, even when the
+        // document view's frame stays the window's height (a short file).
+        if documentLayout.contentHeight != gutterContentHeight {
+            gutterContentHeight = documentLayout.contentHeight
+            gutter.layoutTiles()
+        }
         let insets = scrollView.contentView.contentInsets
         let height = max(documentLayout.contentHeight, scrollView.contentView.bounds.height - insets.top - insets.bottom)
         let width = scrollView.contentView.bounds.width
@@ -456,9 +553,14 @@ public final class AlloyEditorView: NSView {
 
     /// Lays the text out in another font (the editor text size changed).
     public func setFont(_ font: CTFont) {
+        anchorLine = nil
         let insets = documentLayout.insets
-        documentLayout = DocumentLayout(text: buffer.text, font: font)
+        documentLayout = DocumentLayout(text: buffer.text, font: font)  // keeps the padding and column below
         documentLayout.insets = insets
+        documentLayout.fontSpans = fontSpans
+        documentLayout.concealment = concealment
+        documentLayout.replacements = inlineReplacements
+        updateRevealedLines()
         updateWrapWidth()
         updateDocumentHeight()
         gutter.needsDisplay = true
@@ -589,6 +691,7 @@ public final class AlloyEditorView: NSView {
     /// Draws now.
     public func render() {
         needsRender = false
+        keepAnchorInPlace()
         let visible = drawingRect
         let size = visible.size
         guard size.width > 0, size.height > 0 else { return }
@@ -615,6 +718,8 @@ public final class AlloyEditorView: NSView {
         frame.decorations = decorations + snippetDecorations
         frame.lineBackground = lineBackground
         frame.lineSuffixes = foldSuffixes
+        frame.focusedLines = focusedLines
+        frame.highlightsCurrentLine = highlightsCurrentLine
         if let marked = documentView.composingRange {
             frame.decorations.append(Decoration(range: marked, color: theme.text, style: .underline))
         }
@@ -627,6 +732,69 @@ public final class AlloyEditorView: NSView {
         frameMilliseconds.append(renderer.lastStats.cpuMilliseconds)
         // The document height can change while drawing (wrapped lines got measured).
         updateDocumentHeight()
+    }
+
+    /// What's on screen now, as an image: drawn again into an offscreen texture, since a Metal
+    /// layer's own drawables can't be read back, and a view snapshot leaves the text out. For
+    /// previews (a tab dragged out of its window shows its file). No caret.
+    public func snapshot() -> NSImage? {
+        let visible = drawingRect
+        let scale = canvas.metalLayer.contentsScale
+        let width = Int((visible.width * scale).rounded()), height = Int((visible.height * scale).rounded())
+        guard width > 0, height > 0, width <= 16_384, height <= 16_384 else { return nil }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget]
+        descriptor.storageMode = renderer.device.hasUnifiedMemory ? .shared : .managed
+        guard let texture = renderer.device.makeTexture(descriptor: descriptor) else { return nil }
+        var frame = RenderFrame(scrollY: visible.minY, size: visible.size, scale: scale, selections: buffer.selections,
+                                caretVisible: false, theme: theme, styles: styles)
+        frame.decorations = decorations + snippetDecorations
+        frame.lineBackground = lineBackground
+        frame.lineSuffixes = foldSuffixes
+        frame.focusedLines = focusedLines
+        frame.highlightsCurrentLine = highlightsCurrentLine
+        guard let commands = renderer.draw(frame, layout: documentLayout, into: texture) else { return nil }
+        if texture.storageMode == .managed, let sync = renderer.device.makeCommandQueue()?.makeCommandBuffer(), let blit = sync.makeBlitCommandEncoder() {
+            commands.waitUntilCompleted()
+            blit.synchronize(resource: texture)
+            blit.endEncoding()
+            sync.commit()
+            sync.waitUntilCompleted()
+        } else {
+            commands.waitUntilCompleted()
+        }
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        texture.getBytes(&pixels, bytesPerRow: bytesPerRow, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bytesPerRow,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
+        return NSImage(cgImage: image, size: visible.size)
+    }
+
+    /// The line at the top of the screen last frame. Lines are counted at a plain row until
+    /// measured; when lines above it are measured on the way up (a heading, a wrapped paragraph)
+    /// and turn out taller, everything below would jump. Measuring them first and moving the
+    /// scroll by what they grew keeps the text that was on screen where it was.
+    private var anchorLine: Int?
+
+    private func keepAnchorInPlace() {
+        let top = viewport.minY
+        let first = documentLayout.line(atY: top).line
+        defer { anchorLine = documentLayout.line(atY: viewport.minY).line }
+        // Scrolling, not a jump: no more than a screen's lines between them.
+        let screen = Int(viewport.height / documentLayout.lineHeight) + 10
+        guard let anchor = anchorLine, anchor > first, anchor < documentLayout.lineCount, anchor - first <= screen else { return }
+        let before = documentLayout.y(ofLine: anchor)
+        for line in first..<anchor where !documentLayout.isHidden(line: line) { _ = documentLayout.layout(line: line) }
+        let grown = documentLayout.y(ofLine: anchor) - before
+        guard grown != 0 else { return }
+        updateDocumentHeight()
+        let clip = scrollView.contentView
+        clip.scroll(to: CGPoint(x: clip.bounds.minX, y: clip.bounds.minY + grown))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     public var lastFrameStats: FrameStats { renderer.lastStats }

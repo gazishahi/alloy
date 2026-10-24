@@ -27,13 +27,36 @@ public struct RenderTheme: Sendable {
                                          selection: [0.20, 0.33, 0.55, 1], caret: [0.25, 0.6, 1.0, 1], currentLine: [1, 1, 1, 0.045])
 }
 
-/// A color for a UTF-16 range of a line (syntax highlighting, step 4).
+/// How a span of prose is set, beyond its color: bold, italic, or in the code font. A client
+/// that lays text out in a reading font turns these into font runs (`FontSpan`); a code editor
+/// leaves them be.
+public struct Emphasis: OptionSet, Sendable, Hashable {
+    public let rawValue: UInt8
+    public init(rawValue: UInt8) { self.rawValue = rawValue }
+    public static let bold = Emphasis(rawValue: 1)
+    public static let italic = Emphasis(rawValue: 2)
+    public static let code = Emphasis(rawValue: 4)
+
+    /// A heading's level (1 to 6), which a client sets larger; 0 for text that isn't one.
+    public static func heading(_ level: Int) -> Emphasis { Emphasis(rawValue: UInt8(min(max(level, 1), 6)) << 3) }
+    public var headingLevel: Int { Int((rawValue >> 3) & 7) }
+
+    /// Markup prose hides away from the caret: `**`, a heading's `#`, a link's URL.
+    public static let concealed = Emphasis(rawValue: 64)
+    /// TeX math (`$…$`, `$$…$$`), which a client can typeset and draw in its place.
+    public static let math = Emphasis(rawValue: 128)
+}
+
+/// A color, and an emphasis, for a UTF-16 range of a line (syntax highlighting). A span with
+/// no color leaves the text color; one with no emphasis leaves the font.
 public struct StyleSpan: Sendable, Equatable {
     public var range: Range<Int>
-    public var color: SIMD4<Float>
-    public init(range: Range<Int>, color: SIMD4<Float>) {
+    public var color: SIMD4<Float>?
+    public var emphasis: Emphasis
+    public init(range: Range<Int>, color: SIMD4<Float>?, emphasis: Emphasis = []) {
         self.range = range
         self.color = color
+        self.emphasis = emphasis
     }
 }
 
@@ -84,6 +107,13 @@ public struct RenderFrame {
     public var lineBackground: ((Int) -> SIMD4<Float>?)?
     /// Text drawn after a line's own, on a pill: a folded region's "… }".
     public var lineSuffixes: [Int: LineSuffix] = [:]
+    /// The lines drawn at full strength; the rest are faded (a writer's focus on one
+    /// paragraph). Nil draws every line alike.
+    public var focusedLines: ClosedRange<Int>?
+    /// The band across the caret's line; off for prose, where the line is a sentence's middle.
+    public var highlightsCurrentLine = true
+    /// How strong a faded line's text is.
+    public static let fadedAlpha: Float = 0.3
 
     public init(scrollY: CGFloat, size: CGSize, scale: CGFloat, selections: [Selection], caretVisible: Bool = true,
                 theme: RenderTheme, styles: ((Int) -> [StyleSpan])? = nil) {
@@ -240,6 +270,21 @@ public final class TextRenderer {
             encoder.setFragmentBytes(&atlasSize, length: MemoryLayout<Float>.size, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: quads.count)
         }
+        // Pictures, each from its own texture (uv in 0...1, so a size of 1).
+        if !imageDraws.isEmpty {
+            var viewport = SIMD2<Float>(Float(target.width), Float(target.height))
+            var one: Float = 1
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBytes(&viewport, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+            encoder.setFragmentBytes(&one, length: MemoryLayout<Float>.size, index: 0)
+            for draw in imageDraws {
+                var quad = draw.quad
+                encoder.setVertexBytes(&quad, length: MemoryLayout<Quad>.stride, index: 0)
+                encoder.setFragmentTexture(draw.texture, index: 0)
+                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
+            }
+        }
         encoder.endEncoding()
         if let drawable { buffer.present(drawable) }
         if let completion { buffer.addCompletedHandler(completion) }
@@ -252,6 +297,35 @@ public final class TextRenderer {
 
     private var atlasRestarted = false
 
+    /// Client images bigger than this many pixels get a texture of their own.
+    static let atlasImageLimit = 256 * 256
+    /// The frame's pictures, each with its texture, drawn after the rest.
+    private var imageDraws: [(texture: MTLTexture, quad: Quad)] = []
+    private var imageTextures: [String: MTLTexture] = [:]
+    private var usedImageKeys: Set<String> = []
+
+    private func texture(for image: CGImage, key: String) -> MTLTexture? {
+        usedImageKeys.insert(key)
+        if let known = imageTextures[key] { return known }
+        let width = image.width, height = image.height
+        guard width > 0, height > 0, width <= 16_384, height <= 16_384 else { return nil }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = .shaderRead
+        descriptor.storageMode = .shared
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: bytesPerRow)
+        imageTextures[key] = texture
+        return texture
+    }
+
     /// A line's glyphs, built once and placed by every frame that shows it: scrolling used to
     /// rebuild every glyph on screen each frame (an atlas lookup, its subpixel position, its
     /// color), most of a frame's CPU for an unchanged screen (2026-10-01, a 455-line TSX file
@@ -262,8 +336,12 @@ public final class TextRenderer {
         let textColor: SIMD4<Float>
         let scale: CGFloat
         let generation: Int
+        /// The left inset baked into the quads' x (a reading column moves it).
+        var inset: CGFloat = 0
         /// Quads with `rect.y` holding only the atlas entry's offset.
         var quads: [Quad] = []
+        /// Pictures drawn from textures of their own: x final, y below the line's top, in pixels.
+        var images: [(key: String, image: CGImage, rect: SIMD4<Float>)] = []
         /// Each quad's pen y below the line's top, in pixels, unrounded.
         var penY: [Float] = []
         /// Each row's baseline below the line's top, in points, and where its quads end.
@@ -273,16 +351,39 @@ public final class TextRenderer {
 
     private func cachedGlyphs(line: Int, laid: LaidOutLine, spans: [StyleSpan], frame: RenderFrame, layout: DocumentLayout) -> LineGlyphs {
         let key = ObjectIdentifier(laid)
-        if let known = lineGlyphs[line], known.layout == key, known.scale == frame.scale, known.generation == atlas.generation,
+        if let known = lineGlyphs[line], known.layout == key, known.scale == frame.scale, known.generation == atlas.generation, known.inset == layout.insets.width,
            known.textColor == frame.theme.text, known.spans == spans {
             return known
         }
         let scale = frame.scale
-        var built = LineGlyphs(layout: key, spans: spans, textColor: frame.theme.text, scale: scale, generation: atlas.generation)
+        var built = LineGlyphs(layout: key, spans: spans, textColor: frame.theme.text, scale: scale, generation: atlas.generation, inset: layout.insets.width)
         var spanIndex = 0
         for (index, row) in laid.rows.enumerated() {
-            let baseline = CGFloat(index) * layout.lineHeight + layout.ascent
+            let baseline = laid.rowTops[index] + laid.rowBaselines[index]
             for run in row.runs {
+                // Hidden markup takes no room and draws nothing; a replacement draws its image.
+                if run.isConcealed { continue }
+                if let index = run.replacement, laid.replacements.indices.contains(index), let position = run.positions.first {
+                    let replacement = laid.replacements[index]
+                    let ascent = replacement.size.height - replacement.descent
+                    let draw = replacement.drawSize ?? replacement.size
+                    // Centered in its box when drawn smaller than it.
+                    let inset = CGPoint(x: (replacement.size.width - draw.width) / 2, y: (replacement.size.height - draw.height) / 2)
+                    let penX = ((layout.insets.width + position.x + inset.x) * scale).rounded()
+                    // A picture gets a texture of its own: in the atlas, a few would fill it.
+                    if replacement.image.width * replacement.image.height > Self.atlasImageLimit {
+                        built.images.append((replacement.key, replacement.image,
+                                             SIMD4(Float(penX), Float(((baseline - ascent + inset.y) * scale).rounded()), Float((draw.width * scale).rounded()), Float((draw.height * scale).rounded()))))
+                        continue
+                    }
+                    if let entry = atlas.entry(image: replacement.image, key: replacement.key, ascent: ascent - inset.y, scale: scale) {
+                        built.quads.append(Quad(rect: SIMD4(Float(penX), Float(entry.offset.y), Float(entry.region.width), Float(entry.region.height)),
+                                                uv: SIMD4(Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)),
+                                                color: frame.theme.text, kind: 2))
+                        built.penY.append(Float(baseline * scale))
+                    }
+                    continue
+                }
                 for g in 0..<run.glyphs.count {
                     let penX = (layout.insets.width + run.positions[g].x) * scale
                     let snappedX = floor(penX)
@@ -292,7 +393,7 @@ public final class TextRenderer {
                     var color = frame.theme.text
                     let at = run.indices[g]
                     while spanIndex < spans.count, spans[spanIndex].range.upperBound <= at { spanIndex += 1 }
-                    if spanIndex < spans.count, spans[spanIndex].range.contains(at) { color = spans[spanIndex].color }
+                    if spanIndex < spans.count, spans[spanIndex].range.contains(at), let spanColor = spans[spanIndex].color { color = spanColor }
                     built.quads.append(Quad(rect: SIMD4(Float(snappedX + entry.offset.x), Float(entry.offset.y), Float(entry.region.width), Float(entry.region.height)),
                                             uv: SIMD4(Float(entry.region.minX), Float(entry.region.minY), Float(entry.region.width), Float(entry.region.height)),
                                             color: color, kind: entry.isColor ? 2 : 1))
@@ -321,6 +422,12 @@ public final class TextRenderer {
     func buildQuads(_ frame: RenderFrame, layout: DocumentLayout) -> [Quad] {
         let scale = frame.scale
         let generation = atlas.generation
+        imageDraws.removeAll(keepingCapacity: true)
+        usedImageKeys.removeAll(keepingCapacity: true)
+        defer {
+            // Pictures off screen give their textures back once there are a few.
+            if imageTextures.count > 24 { imageTextures = imageTextures.filter { usedImageKeys.contains($0.key) } }
+        }
         var solids: [Quad] = []
         var glyphs: [Quad] = []
         var carets: [Quad] = []
@@ -342,9 +449,9 @@ public final class TextRenderer {
         }
 
         // The current-line band: where a caret with no selection sits.
-        for selection in frame.selections where selection.isCaret {
+        for selection in frame.selections where selection.isCaret && frame.highlightsCurrentLine {
             let caret = layout.caretRect(at: selection.head)
-            solids.append(Quad(rect: rect(0, caret.minY, viewportWidth, lineHeight), uv: .zero, color: frame.theme.currentLine, kind: 0))
+            solids.append(Quad(rect: rect(0, caret.minY, viewportWidth, caret.height), uv: .zero, color: frame.theme.currentLine, kind: 0))
         }
 
         // Only the decorations on screen, found once a frame: every line used to test every one
@@ -371,7 +478,7 @@ public final class TextRenderer {
             let lineRange = lineStart..<(lineStart + laid.text.utf16.count)
             let spans = frame.styles?(line) ?? []
             if let tint = frame.lineBackground?(line) {
-                solids.append(Quad(rect: rect(0, top, viewportWidth, CGFloat(laid.rows.count) * lineHeight), uv: .zero, color: tint, kind: 0))
+                solids.append(Quad(rect: rect(0, top, viewportWidth, laid.height), uv: .zero, color: tint, kind: 0))
             }
 
             // Selections: a band per row they cover, reaching the edge when they continue past it.
@@ -386,7 +493,7 @@ public final class TextRenderer {
                     guard lower < upper || (continues && lower <= upper && sel.lowerBound <= rowRange.upperBound) else { continue }
                     let x0 = laid.caretX(at: lower - lineStart).x
                     let x1 = continues ? viewportWidth - layout.insets.width : laid.caretX(at: upper - lineStart).x
-                    solids.append(Quad(rect: rect(layout.insets.width + x0, top + CGFloat(index) * lineHeight, max(2, x1 - x0), lineHeight),
+                    solids.append(Quad(rect: rect(layout.insets.width + x0, top + laid.rowTops[index], max(2, x1 - x0), laid.rowHeights[index]),
                                        uv: .zero, color: frame.theme.selection, kind: 0))
                 }
             }
@@ -402,16 +509,16 @@ public final class TextRenderer {
                     guard lower < upper else { continue }
                     let x0 = laid.caretX(at: lower - lineStart).x
                     let x1 = laid.caretX(at: upper - lineStart).x
-                    let rowTop = top + CGFloat(index) * lineHeight
+                    let rowTop = top + laid.rowTops[index], rowHeight = laid.rowHeights[index]
                     switch decoration.style {
                     case .background:
-                        solids.append(Quad(rect: rect(layout.insets.width + x0, rowTop, max(1, x1 - x0), lineHeight), uv: .zero, color: decoration.color, kind: 0))
+                        solids.append(Quad(rect: rect(layout.insets.width + x0, rowTop, max(1, x1 - x0), rowHeight), uv: .zero, color: decoration.color, kind: 0))
                     case .underline:
-                        underlines.append(Quad(rect: rect(layout.insets.width + x0, rowTop + lineHeight - 2, max(1, x1 - x0), 1), uv: .zero, color: decoration.color, kind: 0))
+                        underlines.append(Quad(rect: rect(layout.insets.width + x0, rowTop + rowHeight - 2, max(1, x1 - x0), 1), uv: .zero, color: decoration.color, kind: 0))
                     case .dottedUnderline:
                         var x = x0
                         while x < x1 {
-                            underlines.append(Quad(rect: rect(layout.insets.width + x, rowTop + lineHeight - 2, min(2, x1 - x), 1), uv: .zero, color: decoration.color, kind: 0))
+                            underlines.append(Quad(rect: rect(layout.insets.width + x, rowTop + rowHeight - 2, min(2, x1 - x), 1), uv: .zero, color: decoration.color, kind: 0))
                             x += 4
                         }
                     }
@@ -422,6 +529,7 @@ public final class TextRenderer {
             let built = cachedGlyphs(line: line, laid: laid, spans: spans, frame: frame, layout: layout)
             usedGlyphs[line] = built
             let lineTop = Float((top - frame.scrollY) * scale)
+            let faded = frame.focusedLines.map { !$0.contains(line) } ?? false
             var start = 0
             for row in built.rows {
                 defer { start = row.end }
@@ -430,8 +538,15 @@ public final class TextRenderer {
                 for index in start..<row.end {
                     var quad = built.quads[index]
                     quad.rect.y += (lineTop + built.penY[index]).rounded()
+                    if faded { quad.color.w *= RenderFrame.fadedAlpha }
                     glyphs.append(quad)
                 }
+            }
+            for picture in built.images {
+                guard let texture = texture(for: picture.image, key: picture.key) else { continue }
+                var rect = picture.rect
+                rect.y += lineTop.rounded()
+                imageDraws.append((texture, Quad(rect: rect, uv: SIMD4(0, 0, 1, 1), color: SIMD4(1, 1, 1, 1), kind: 2)))
             }
 
             // A suffix after the line's last row, on its pill.
@@ -441,9 +556,9 @@ public final class TextRenderer {
                 let suffixLayout = layout.suffixLayout(suffix.text)
                 let width = suffixLayout.width
                 let x0 = layout.insets.width + endX + LineSuffix.gap
-                let rowTop = top + CGFloat(lastRow) * lineHeight
-                solids.append(Quad(rect: rect(x0, rowTop + 2, width + LineSuffix.padding * 2, lineHeight - 4), uv: .zero, color: suffix.background, kind: 0))
-                let baseline = rowTop + layout.ascent
+                let rowTop = top + laid.rowTops[lastRow]
+                solids.append(Quad(rect: rect(x0, rowTop + 2, width + LineSuffix.padding * 2, laid.rowHeights[lastRow] - 4), uv: .zero, color: suffix.background, kind: 0))
+                let baseline = rowTop + laid.rowBaselines[lastRow]
                 for run in suffixLayout.line.rows.first?.runs ?? [] {
                     for g in 0..<run.glyphs.count {
                         let penX = (x0 + LineSuffix.padding + run.positions[g].x) * scale
@@ -464,7 +579,7 @@ public final class TextRenderer {
             for selection in frame.selections {
                 let caret = layout.caretRect(at: selection.head)
                 guard caret.maxY >= frame.scrollY, caret.minY <= frame.scrollY + frame.size.height else { continue }
-                carets.append(Quad(rect: rect(caret.minX - 0.5, caret.minY + 1, 2 / scale * max(1, scale / 1.5), lineHeight - 2),
+                carets.append(Quad(rect: rect(caret.minX - 0.5, caret.minY + 1, 2 / scale * max(1, scale / 1.5), caret.height - 2),
                                    uv: .zero, color: frame.theme.caret, kind: 0))
             }
         }

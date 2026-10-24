@@ -4,7 +4,7 @@ Alloy is a GPU text editing engine for macOS, in Swift. It's the editor behind t
 [Side](https://github.com/gazishahi/side-releases): a document model built for big files and for
 agents that edit alongside you, drawn with Metal.
 
-**Status: 0.7.4, pre-release.** It runs Side's editor. The API may still change before 1.0.
+**Status: 0.8.0, pre-release.** It runs Side's editor. The API may still change before 1.0.
 
 ## What's in it
 
@@ -13,7 +13,13 @@ agents that edit alongside you, drawn with Metal.
 | **AlloyCore** | The document: `Rope` (persistent balanced tree, O(log n) lines and offsets, free copies), `TextBuffer` (multiple selections, grouped undo, change events that replay exactly), `RopeString` (an `NSString` view of a rope, no copy), `Folding` (foldable regions from indentation, one pass) | Foundation |
 | **AlloyRender** | Drawing: `DocumentLayout` (CoreText shaping per line, soft wrap), `GlyphAtlas`, `TextRenderer` (Metal, instanced quads, selections, carets, decorations) | AlloyCore, CoreText, Metal |
 | **AlloyAppKit** | The view: `AlloyEditorView` and `AlloyTextView` (`NSTextInputClient`, so IME, dictation and marked text work; key bindings; mouse; pasteboard; `NSTextFinder`; VoiceOver as a text area), `AlloyGutterView` (numbers, marks, breakpoint tags, fold arrows), `AlloyMinimapView` | AlloyCore, AlloyRender, AppKit |
-| **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. `SyntaxSymbolSource`: an outline of declarations from the same tree, walkable off the main thread. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown, YAML, TOML, HTML, CSS, SCSS, Bash, Java, PHP, Dockerfile, Makefile, SQL (files known by name too: `Dockerfile`, `Makefile`) | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
+| **AlloySyntax** | `SyntaxHighlighter`: tree-sitter, incremental, parsed in the background, colored a line at a time. `SyntaxSymbolSource`: an outline of declarations from the same tree, walkable off the main thread. Swift, TypeScript, TSX, JavaScript, Python, Rust, Go, Lua, Ruby, C, C++, JSON, Markdown, YAML, TOML, HTML, CSS, SCSS, Bash, Java, PHP, Dockerfile, Makefile, SQL, Svelte, LaTeX (files known by name too: `Dockerfile`, `Makefile`). Embedded languages are colored in their own: HTML's and Svelte's `<script>` and `<style>`, Svelte's `{expressions}`, Markdown's fenced code and inline syntax. Captures can carry an `Emphasis` (bold, italic, code, a heading's level, markup to hide, TeX math) beside their color | AlloyCore, AlloyRender, [SwiftTreeSitter](https://github.com/ChimeHQ/SwiftTreeSitter) |
+
+Prose: a document can be set as rich text (Side's Live Markdown) with the same engine. Font runs
+(`FontSpan`) are laid out before measuring, so rows take the height their fonts need; markup can
+hide away from the caret (laid out at no width, every offset still the source's); and a range can
+draw as the client's image (`InlineReplacement`: a typeset formula, a picture, a table's padding).
+Code is untouched by all of it: one font, one line height.
 
 Editing: multiple cursors (⌥-click, ⌥⌘↑/↓), column selection (⌥-drag), code folding (the gutter,
 or `foldAtCaret`, `unfoldAtCaret`, `foldAll`, `unfoldAll`; a folded region reads as one line, `header { … }`, and
@@ -32,7 +38,7 @@ tree-sitter.
 ## Using it
 
 ```swift
-.package(url: "https://github.com/gazishahi/alloy", from: "0.7.4")
+.package(url: "https://github.com/gazishahi/alloy", from: "0.8.0")
 ```
 
 ```swift

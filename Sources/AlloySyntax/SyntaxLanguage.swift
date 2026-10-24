@@ -24,6 +24,9 @@ import TreeSitterPHPGrammar
 import TreeSitterDockerfileGrammar
 import TreeSitterMakeGrammar
 import TreeSitterSQLGrammar
+import TreeSitterSvelteGrammar
+import TreeSitterLaTeXGrammar
+import TreeSitterMarkdownInline
 
 /// A language Alloy highlights: its tree-sitter grammar and its highlight query
 /// (docs/DESIGN.md, A3). The queries are the grammars' own, kept in `Queries/` so they load
@@ -33,6 +36,9 @@ public final class SyntaxLanguage: @unchecked Sendable {
     public let name: String
     public let language: Language
     public let highlights: Query
+    /// Where other languages live inside this one (`<script>` in HTML, fenced code in Markdown):
+    /// `Queries/<name>-injections.scm`, when the language has embedded ones.
+    public let injections: Query?
     /// Patterns rooted at big containers, rewritten to run from their children.
     let containerPatterns: ContainerPatterns?
     /// Top-level patterns found by Alloy's own split, and tree-sitter's count (tests).
@@ -47,6 +53,12 @@ public final class SyntaxLanguage: @unchecked Sendable {
         }
         let source = try String(contentsOf: url, encoding: .utf8)
         highlights = try Query(language: self.language, data: Data(source.utf8))
+        if let url = Bundle.module.url(forResource: queryFile + "-injections", withExtension: "scm", subdirectory: "Queries")
+            ?? Bundle.module.url(forResource: queryFile + "-injections", withExtension: "scm") {
+            injections = try Query(language: self.language, data: Data(String(contentsOf: url, encoding: .utf8).utf8))
+        } else {
+            injections = nil
+        }
         splitPatternCount = ContainerPatterns.topLevelPatterns(source).count
         containerPatterns = ContainerPatterns(language: self.language, source: source, patternCount: highlights.patternCount)
     }
@@ -71,6 +83,30 @@ public final class SyntaxLanguage: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return cache[key]
+    }
+
+    /// The language a name stands for, as an injection or a Markdown fence names it: a
+    /// language's own name (`typescript`), an extension (`ts`), or a common alias (`shell`).
+    public static func named(_ name: String) -> SyntaxLanguage? {
+        let lower = name.lowercased().trimmingCharacters(in: .whitespaces)
+        if specs[lower] != nil { return forKey(lower) }
+        if let key = extensions[lower] { return forKey(key) }
+        if let key = aliases[lower] { return forKey(key) }
+        return nil
+    }
+
+    private static let aliases: [String: String] = [
+        "shell": "bash", "console": "bash", "golang": "go", "c++": "cpp", "jsonc": "json", "yml": "yaml",
+        "javascriptreact": "javascript", "typescriptreact": "tsx", "postcss": "css", "dockerfile": "dockerfile",
+    ]
+
+    private static func forKey(_ key: String) -> SyntaxLanguage? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[key] { return cached }
+        guard let spec = specs[key], let language = try? SyntaxLanguage(name: key, language: spec.language(), queryFile: spec.query) else { return nil }
+        cache[key] = language
+        return language
     }
 
     /// Whether Alloy highlights this extension at all.
@@ -102,6 +138,8 @@ public final class SyntaxLanguage: @unchecked Sendable {
         "dockerfile": "dockerfile", "containerfile": "dockerfile",
         "mk": "make", "make": "make",
         "sql": "sql",
+        "svelte": "svelte",
+        "tex": "latex", "ltx": "latex", "sty": "latex", "cls": "latex", "dtx": "latex",
     ]
 
     /// Files known by their whole name (they have no extension to go by), as the extension
@@ -151,6 +189,10 @@ public final class SyntaxLanguage: @unchecked Sendable {
         "dockerfile": Spec(language: { alloy_tree_sitter_dockerfile() }, query: "dockerfile"),
         "make": Spec(language: { alloy_tree_sitter_make() }, query: "make"),
         "sql": Spec(language: { alloy_tree_sitter_sql() }, query: "sql"),
+        "svelte": Spec(language: { alloy_tree_sitter_svelte() }, query: "svelte"),
+        "latex": Spec(language: { alloy_tree_sitter_latex() }, query: "latex"),
+        // Markdown's inline syntax (emphasis, code spans, links): embedded in each paragraph.
+        "markdown_inline": Spec(language: { tree_sitter_markdown_inline() }, query: "markdown_inline"),
     ]
 
     private nonisolated(unsafe) static var cache: [String: SyntaxLanguage] = [:]
