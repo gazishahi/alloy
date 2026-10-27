@@ -81,9 +81,12 @@ public final class AlloyMinimapView: NSView {
     }
 
     /// What it shows changed (the text, its colors, the marks, the theme): every tile again.
+    // By the value set, not the one read back (see `AlloyGutterView.needsDisplay`).
     public override var needsDisplay: Bool {
-        didSet {
-            guard needsDisplay else { return }
+        get { super.needsDisplay }
+        set {
+            super.needsDisplay = newValue
+            guard newValue else { return }
             for tile in tiles.values { tile.setNeedsDisplay() }
             layoutTiles()
         }
@@ -161,6 +164,9 @@ public final class AlloyMinimapView: NSView {
         editor.prepareStyles?(firstLine..<(lastLine + 1))
         let plain = editor.theme.text
         let maxColumns = Int((bounds.width - Self.inset * 2) / Self.characterWidth)
+        // Narrower than its insets (Make turns the map off by giving it no width): nothing fits,
+        // and a negative count made a backwards range below (0.2.0's crash, 2026-10-27).
+        guard maxColumns > 0 else { return }
         var lineStart = text.offset(ofLine: firstLine)
         for line in firstLine...lastLine {
             let y = CGFloat(line - firstLine) * Self.lineHeight

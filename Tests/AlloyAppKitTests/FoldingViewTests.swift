@@ -380,4 +380,55 @@ final class FoldingViewTests: XCTestCase {
         gutter.marks = [3: [GutterMark(style: .breakpoint(enabled: true, verified: false), color: .systemBlue)]]
         gutter.display()
     }
+
+    /// Another document in the same view: its numbers, not the last one's (a 17-line file, then
+    /// a longer one, kept 17 numbers until the window was resized).
+    func testGutterNumbersFollowAnotherDocument() throws {
+        try open()
+        // Beside the editor, as Side places it.
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 400))
+        editor.removeFromSuperview()
+        editor.frame = NSRect(x: 40, y: 0, width: 600, height: 400)
+        editor.gutter.frame = NSRect(x: 0, y: 0, width: 40, height: 400)
+        host.addSubview(editor.gutter)
+        host.addSubview(editor)
+        window.contentView = host
+        let short = (1...17).map { "line \($0)" }.joined(separator: "\n")
+        let long = (1...60).map { "line \($0)" }.joined(separator: "\n")
+        let shown = Int(editor.drawingRect.height / editor.documentLayout.lineHeight)
+        for hidden in [false, true] {
+            editor.setBuffer(TextBuffer(short))
+            window.displayIfNeeded()
+            XCTAssertEqual(editor.gutter.drawnLastLinesForTesting.last, 16)
+            // A sheet or an image between the two (the gutter hidden), or straight across.
+            editor.gutter.isHidden = hidden
+            editor.setBuffer(TextBuffer(long))
+            window.displayIfNeeded()
+            editor.gutter.isHidden = false
+            window.displayIfNeeded()
+            XCTAssertGreaterThanOrEqual(editor.gutter.drawnLastLinesForTesting.last ?? 0, shown - 1, hidden ? "after a hidden gutter" : "straight across")
+        }
+    }
+
+    /// A minimap turned off (Make hides it and gives it no width) draws nothing when asked: its
+    /// tiles keep the width they had, and a negative column count made a backwards range (0.2.0's
+    /// crash, 2026-10-27).
+    func testAMinimapTurnedOffDrawsNothing() throws {
+        try open()
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 400))
+        editor.removeFromSuperview()
+        editor.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        editor.minimap.frame = NSRect(x: 600, y: 0, width: AlloyMinimapView.width, height: 400)
+        host.addSubview(editor)
+        host.addSubview(editor.minimap)
+        window.contentView = host
+        window.displayIfNeeded()
+        let tiles = editor.minimap.layer?.sublayers ?? []
+        XCTAssertFalse(tiles.isEmpty)
+        for tile in tiles { tile.displayIfNeeded() }
+        editor.minimap.isHidden = true
+        editor.minimap.frame.size.width = 0
+        editor.minimap.needsDisplay = true
+        for tile in tiles { tile.setNeedsDisplay(); tile.displayIfNeeded() }
+    }
 }

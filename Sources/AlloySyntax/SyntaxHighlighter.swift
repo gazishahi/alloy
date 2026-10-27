@@ -514,7 +514,7 @@ public final class SyntaxHighlighter {
         var farChange = false
         func forget(_ ranges: [TSRange]) {
             for range in ranges {
-                for line in Int(range.points.lowerBound.row)...Int(range.points.upperBound.row) where lineCache.removeValue(forKey: line) != nil { farChange = true }
+                for line in Int(range.points.lowerBound.row)...max(Int(range.points.lowerBound.row), Int(range.points.upperBound.row)) where lineCache.removeValue(forKey: line) != nil { farChange = true }
             }
         }
         for (name, layer) in layers where regions[name] == nil {
@@ -532,7 +532,7 @@ public final class SyntaxHighlighter {
             guard let parsed = Self.parse(layer.parser, text: text, oldTree: oldRanges == sorted ? old : nil) else { continue }
             if let old, oldRanges == sorted {
                 for range in parsed.changedRanges(from: old) {
-                    for line in Int(range.points.lowerBound.row)...Int(range.points.upperBound.row) where lineCache.removeValue(forKey: line) != nil { farChange = true }
+                    for line in Int(range.points.lowerBound.row)...max(Int(range.points.lowerBound.row), Int(range.points.upperBound.row)) where lineCache.removeValue(forKey: line) != nil { farChange = true }
                 }
             } else {
                 forget(oldRanges)

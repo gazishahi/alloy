@@ -107,7 +107,10 @@ extension AlloyTextView {
             let clamped = NSIntersectionRange(range, NSRange(location: 0, length: spoken.length))
             return spoken.string.substring(with: clamped)
         }
-        return ax?.text.substring(range.location..<(range.location + range.length))
+        // A client's range can be NSNotFound or past the end: clamped, not added up as given.
+        guard let text = ax?.text, range.location != NSNotFound else { return nil }
+        let start = max(0, min(range.location, text.utf16Count))
+        return text.substring(start..<(start + max(0, min(range.length, text.utf16Count - start))))
     }
 
     public override func accessibilityAttributedString(for range: NSRange) -> NSAttributedString? {

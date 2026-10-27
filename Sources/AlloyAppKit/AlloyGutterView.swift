@@ -155,9 +155,14 @@ public final class AlloyGutterView: NSView {
         wantsLayer = true
     }
 
+    // By the value set, not the one read back: once the view has drawn, AppKit reads back false
+    // right after `needsDisplay = true`, and the tiles kept another document's numbers until a
+    // resize redrew them (2026-10-27).
     public override var needsDisplay: Bool {
-        didSet {
-            guard needsDisplay else { return }
+        get { super.needsDisplay }
+        set {
+            super.needsDisplay = newValue
+            guard newValue else { return }
             for tile in tiles.values { tile.setNeedsDisplay() }
             layoutTiles()
         }
@@ -219,6 +224,13 @@ public final class AlloyGutterView: NSView {
                 tile.frame = frame
             }
         }
+    }
+
+    /// The last line each shown tile drew, top to bottom (tests).
+    var drawnLastLinesForTesting: [Int] {
+        layoutTiles()
+        for tile in tiles.values { tile.displayIfNeeded() }
+        return tiles.keys.sorted().compactMap { tiles[$0]?.drawn?.last }
     }
 
     /// Follows a scroll: tiles move; only the ones coming into view are drawn.
