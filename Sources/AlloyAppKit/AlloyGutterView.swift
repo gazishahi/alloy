@@ -128,8 +128,10 @@ public final class AlloyGutterView: NSView {
     @MainActor private final class TileDrawer: NSObject, @preconcurrency CALayerDelegate {
         weak var gutter: AlloyGutterView?
         func draw(_ layer: CALayer, in context: CGContext) {
-            guard let tile = layer as? Tile else { return }
-            gutter?.drawTile(tile, in: context)
+            guard let tile = layer as? Tile, let gutter else { return }
+            // A layer draws outside AppKit's drawing, so a dynamic color (the default numbers'
+            // tertiary label) is resolved here for the gutter's own appearance, not the app's.
+            gutter.effectiveAppearance.performAsCurrentDrawingAppearance { gutter.drawTile(tile, in: context) }
         }
         // No animation when a tile moves or is shown.
         func action(for layer: CALayer, forKey event: String) -> CAAction? { NSNull() }
@@ -166,6 +168,12 @@ public final class AlloyGutterView: NSView {
             for tile in tiles.values { tile.setNeedsDisplay() }
             layoutTiles()
         }
+    }
+
+    /// Its tiles are layers, which AppKit doesn't redraw for a new appearance.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     public override func layout() {

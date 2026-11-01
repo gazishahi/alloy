@@ -92,6 +92,12 @@ public final class AlloyMinimapView: NSView {
         }
     }
 
+    /// Its tiles are layers, which AppKit doesn't redraw for a new appearance.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     public override func layout() {
         super.layout()
         layoutTiles()
@@ -151,7 +157,7 @@ public final class AlloyMinimapView: NSView {
         let viewport = editor.viewport
         let top = layout.line(atY: viewport.minY).line, bottom = layout.line(atY: viewport.maxY).line
         viewportMark.frame = CGRect(x: 0, y: CGFloat(top - first) * Self.lineHeight, width: bounds.width, height: CGFloat(max(1, bottom - top + 1)) * Self.lineHeight)
-        viewportMark.backgroundColor = viewportColor.cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance { viewportMark.backgroundColor = viewportColor.cgColor }
     }
 
     private func drawTile(_ tile: Tile, in context: CGContext) {

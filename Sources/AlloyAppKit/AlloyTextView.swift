@@ -42,6 +42,9 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     /// ⌥-drag: where the rectangle started, and the selections before the press.
     private var columnStart: CGPoint?
     private var autoscrollTimer: Timer?
+    /// Whether the press being dragged began here. A drag whose press went elsewhere (the
+    /// window's title area, to move it) used to autoscroll toward the pointer, to the top.
+    private var pressed = false
     let textFinder = NSTextFinder()
 
     public override var isFlipped: Bool { true }
@@ -452,6 +455,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     // MARK: Mouse
 
     public override func mouseDown(with event: NSEvent) {
+        pressed = true
         window?.makeFirstResponder(self)
         endComposition()
         let point = convert(event.locationInWindow, from: nil)
@@ -480,6 +484,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        guard pressed else { return }
         if let start = columnStart {
             setSelections(columnSelections(from: start, to: convert(event.locationInWindow, from: nil)))
             autoscroll(with: event)
@@ -492,6 +497,8 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
             autoscrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let window = self.window else { return }
+                    // The button came up somewhere this view never heard about.
+                    guard NSEvent.pressedMouseButtons & 1 != 0 else { self.mouseUp(with: event); return }
                     let point = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
                     guard !self.visibleRect.contains(point) else { self.autoscrollTimer?.invalidate(); self.autoscrollTimer = nil; return }
                     self.scrollToVisible(CGRect(x: 0, y: point.y, width: 1, height: 1))
@@ -539,6 +546,7 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
     }
 
     public override func mouseUp(with event: NSEvent) {
+        pressed = false
         autoscrollTimer?.invalidate()
         autoscrollTimer = nil
         dragAnchor = nil
