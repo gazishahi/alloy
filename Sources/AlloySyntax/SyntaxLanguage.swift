@@ -133,6 +133,9 @@ public final class SyntaxLanguage: @unchecked Sendable {
         "css": "css",
         "scss": "scss",
         "sh": "bash", "bash": "bash", "zsh": "bash", "command": "bash",
+        // KEY=value, # comments, quotes and `export`: shell's grammar colors it as Zed does. Its
+        // own extension, not "sh", so a shell language server never lints it as a script.
+        "env": "bash",
         "java": "java",
         "php": "php",
         "dockerfile": "dockerfile", "containerfile": "dockerfile",
@@ -156,6 +159,8 @@ public final class SyntaxLanguage: @unchecked Sendable {
         let lower = name.lowercased()
         if let byName = fileNames[lower] { return byName }
         if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "dockerfile" }
+        // .env, .env.local, .env.production; `production.env` goes by its extension.
+        if lower == ".env" || lower.hasPrefix(".env.") { return "env" }
         return (name as NSString).pathExtension.lowercased()
     }
 

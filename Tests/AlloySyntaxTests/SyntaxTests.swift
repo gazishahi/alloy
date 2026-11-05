@@ -34,6 +34,11 @@ final class SyntaxTests: XCTestCase {
         XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Dockerfile"), "dockerfile")
         XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Dockerfile.dev"), "dockerfile")
         XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "Makefile"), "mk")
+        for name in [".env", ".env.local", ".ENV.production", "staging.env"] {
+            XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: name), "env", name)
+        }
+        XCTAssertTrue(SyntaxLanguage.supports("env"))
+        XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: ".envrc"), "")
         XCTAssertEqual(SyntaxLanguage.languageExtension(forFileName: "main.Swift"), "swift")
         // Alloy's split of each query into patterns agrees with tree-sitter's count, which the
         // container companions' precedence depends on.
