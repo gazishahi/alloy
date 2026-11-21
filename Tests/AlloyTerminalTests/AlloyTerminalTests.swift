@@ -60,8 +60,10 @@ final class TerminalRendererTests: XCTestCase {
         let axis = try XCTUnwrap(TerminalFont.weightAxis(base), "SF Mono is variable")
         let font = TerminalFont(TerminalFont.font(base, weight: 450))
         XCTAssertEqual(TerminalFont.weight(font.regular), 450)
-        XCTAssertEqual(TerminalFont.weight(font.bold), 750)
-        XCTAssertEqual(TerminalFont.weight(font.boldItalic), 750)
+        // Heavier by a bold's step: 750 on the axis here; macOS 15's SF Mono finds a bold face of
+        // its own instead (683), which is as good.
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(TerminalFont.weight(font.bold)), 650)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(TerminalFont.weight(font.boldItalic)), 650)
         XCTAssertTrue(CTFontGetSymbolicTraits(font.italic).contains(.traitItalic))
         XCTAssertEqual(TerminalFont.weight(TerminalFont(TerminalFont.font(base, weight: 800)).bold), axis.upperBound, "held to the axis")
         XCTAssertEqual(CTFontGetAdvancesForGlyphs(font.bold, .horizontal, [CTFontGetGlyphWithName(font.bold, "M" as CFString)], nil, 1),

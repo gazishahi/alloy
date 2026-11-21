@@ -65,7 +65,11 @@ extension TerminalRenderer {
             guard bits != 0 else { return [] }
             let dot = max(1, (width / 4).rounded())
             let columns: [Float] = [left + width / 4 - dot / 2, left + width * 3 / 4 - dot / 2]
-            let rows: [Float] = (0..<4).map { top + height * (Float($0) * 2 + 1) / 8 - dot / 2 }
+            // Typed a step at a time: as one expression, CI's compiler gave up on it (Alloy 0.9.0).
+            let rows: [Float] = (0..<4).map { (index: Int) -> Float in
+                let center: Float = top + height * (Float(index) * 2 + 1) / 8
+                return center - dot / 2
+            }
             let positions: [(Int, Int)] = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (0, 3), (1, 3)]
             for (bit, (column, row)) in positions.enumerated() where bits & (1 << bit) != 0 {
                 rect(columns[column], rows[row], columns[column] + dot, rows[row] + dot)
