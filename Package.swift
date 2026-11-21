@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "AlloyRender", targets: ["AlloyRender"]),
         .library(name: "AlloyAppKit", targets: ["AlloyAppKit"]),
         .library(name: "AlloySyntax", targets: ["AlloySyntax"]),
+        .library(name: "AlloyTerminal", targets: ["AlloyTerminal"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter", from: "0.25.0"),
@@ -34,6 +35,9 @@ let package = Package(
         .target(name: "AlloyCore", path: "Sources/AlloyCore"),
         .target(name: "AlloyRender", dependencies: ["AlloyCore"], path: "Sources/AlloyRender"),
         .target(name: "AlloyAppKit", dependencies: ["AlloyCore", "AlloyRender"], path: "Sources/AlloyAppKit"),
+        // A terminal's cell grid, drawn on a render thread of its own with AlloyRender's atlas and
+        // shaders. It knows nothing about the emulator (docs/SIDE_RFC_TERMINAL_ENGINE.md).
+        .target(name: "AlloyTerminal", dependencies: ["AlloyRender"], path: "Sources/AlloyTerminal"),
         // Swift's grammar, vendored: it publishes its generated parser only on tags that aren't
         // versions (`0.7.3-with-generated-files`), and a package pinned to a commit can't be
         // depended on by version. Symbols renamed so an app linking tree-sitter-swift too is fine.
@@ -221,6 +225,7 @@ let package = Package(
         .testTarget(name: "AlloyRenderTests", dependencies: ["AlloyCore", "AlloyRender"], path: "Tests/AlloyRenderTests"),
         .testTarget(name: "AlloySyntaxTests", dependencies: ["AlloyCore", "AlloyRender", "AlloySyntax"], path: "Tests/AlloySyntaxTests"),
         .testTarget(name: "AlloyAppKitTests", dependencies: ["AlloyCore", "AlloyRender", "AlloyAppKit"], path: "Tests/AlloyAppKitTests"),
+        .testTarget(name: "AlloyTerminalTests", dependencies: ["AlloyRender", "AlloyTerminal"], path: "Tests/AlloyTerminalTests"),
     ],
     swiftLanguageModes: [.v6]
 )

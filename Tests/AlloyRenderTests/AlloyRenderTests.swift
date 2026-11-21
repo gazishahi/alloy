@@ -154,3 +154,42 @@ final class GlyphAtlasTests: XCTestCase {
         XCTAssertGreaterThan(atlas.generation, 0, "what was drawn from the old texture redraws")
     }
 }
+
+/// A terminal draws on a render thread of its own (docs/SIDE_RFC_TERMINAL_ENGINE.md, Phase 1):
+/// the atlas and the GPU objects must work there, away from the main actor.
+final class OffMainRenderingTests: XCTestCase {
+    func testAnAtlasWorksOnAThreadOfItsOwn() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice(), "no Metal device")
+        let done = expectation(description: "rasterized off the main thread")
+        let thread = Thread {
+            XCTAssertFalse(Thread.isMainThread)
+            let atlas = GlyphAtlas(device: device)
+            let font = CTFontCreateWithName("Menlo" as CFString, 13, nil)
+            var glyph: CGGlyph = 0
+            var letter = UniChar(UInt8(ascii: "A"))
+            CTFontGetGlyphsForCharacters(font, &letter, &glyph, 1)
+            let entry = atlas.entry(font: font, glyph: glyph, subpixel: 0, scale: 2, isColor: false)
+            XCTAssertNotNil(entry)
+            XCTAssertGreaterThan(entry?.region.width ?? 0, 0)
+            XCTAssertEqual(atlas.count, 1)
+            done.fulfill()
+        }
+        thread.start()
+        wait(for: [done], timeout: 10)
+    }
+
+    /// One set of compiled shaders per device and format, whichever thread asks first.
+    func testTheGPUObjectsAreSharedAcrossThreads() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice(), "no Metal device")
+        let onMain = try QuadPipeline.shared(device: device, pixelFormat: .bgra8Unorm)
+        let done = expectation(description: "asked from another thread")
+        nonisolated(unsafe) var offMain: QuadPipeline?
+        let thread = Thread {
+            offMain = try? QuadPipeline.shared(device: device, pixelFormat: .bgra8Unorm)
+            done.fulfill()
+        }
+        thread.start()
+        wait(for: [done], timeout: 10)
+        XCTAssertTrue(offMain === onMain)
+    }
+}

@@ -162,23 +162,21 @@ public final class TextRenderer {
         let shared = try Shared.resources(device: device, pixelFormat: pixelFormat)
         self.device = device
         self.shared = shared
-        queue = shared.queue
-        pipeline = shared.pipeline
-        sampler = shared.sampler
+        queue = shared.gpu.queue
+        pipeline = shared.gpu.pipeline
+        sampler = shared.gpu.sampler
         atlas = shared.atlas
     }
 
-    /// What every renderer on one GPU can share: the command queue, the compiled shaders, the
-    /// sampler, and the glyph atlas (its keys carry the font, size and scale, so editors with
-    /// different fonts share it too). Each editor used to compile the shaders and keep an atlas
-    /// of its own, 4 to 64 MB apiece: a split diff paid twice, Make and Review each again. Held
-    /// while any renderer is: the last one going frees it.
+    /// What every editor renderer on one GPU can share: the GPU objects (`QuadPipeline`, shared
+    /// with any renderer on any thread) and the glyph atlas (its keys carry the font, size and
+    /// scale, so editors with different fonts share it too). Each editor used to compile the
+    /// shaders and keep an atlas of its own, 4 to 64 MB apiece: a split diff paid twice, Make and
+    /// Review each again. Held while any renderer is: the last one going frees it.
     private let shared: Shared
 
     private final class Shared {
-        let queue: MTLCommandQueue
-        let pipeline: MTLRenderPipelineState
-        let sampler: MTLSamplerState
+        let gpu: QuadPipeline
         let atlas: GlyphAtlas
 
         private struct Key: Hashable { let device: UInt64; let pixelFormat: UInt }
@@ -196,26 +194,7 @@ public final class TextRenderer {
         }
 
         @MainActor private init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
-            guard let queue = device.makeCommandQueue() else { throw RenderError.noDevice }
-            self.queue = queue
-            let library = try device.makeLibrary(source: TextRenderer.shaders, options: nil)
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = library.makeFunction(name: "quadVertex")
-            descriptor.fragmentFunction = library.makeFunction(name: "quadFragment")
-            let attachment = descriptor.colorAttachments[0]!
-            attachment.pixelFormat = pixelFormat
-            attachment.isBlendingEnabled = true
-            attachment.rgbBlendOperation = .add
-            attachment.alphaBlendOperation = .add
-            attachment.sourceRGBBlendFactor = .one
-            attachment.sourceAlphaBlendFactor = .one
-            attachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
-            attachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-            let samplerDescriptor = MTLSamplerDescriptor()
-            samplerDescriptor.minFilter = .nearest
-            samplerDescriptor.magFilter = .nearest
-            sampler = device.makeSamplerState(descriptor: samplerDescriptor)!
+            gpu = try QuadPipeline.shared(device: device, pixelFormat: pixelFormat)
             atlas = GlyphAtlas(device: device)
         }
     }
@@ -246,7 +225,9 @@ public final class TextRenderer {
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         let bg = frame.theme.background
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: Double(bg.x), green: Double(bg.y), blue: Double(bg.z), alpha: Double(bg.w))
+        // Premultiplied, as the layer composites it (and as the quads blend): a translucent
+        // background's color is scaled by its alpha.
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: Double(bg.x * bg.w), green: Double(bg.y * bg.w), blue: Double(bg.z * bg.w), alpha: Double(bg.w))
         framesInFlight.wait()
         guard let buffer = queue.makeCommandBuffer(), let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { framesInFlight.signal(); return nil }
         let inFlight = framesInFlight
@@ -587,7 +568,7 @@ public final class TextRenderer {
         return solids + glyphs + underlines + carets
     }
 
-    static let shaders = """
+    nonisolated static let shaders = """
     #include <metal_stdlib>
     using namespace metal;
 

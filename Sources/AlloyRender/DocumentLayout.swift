@@ -287,7 +287,7 @@ public final class DocumentLayout {
     /// nil: no wrapping.
     public private(set) var wrapWidth: CGFloat?
 
-    private var rowIndex: RowIndex
+    private var rowIndex: RowIndex { didSet { rowGeneration &+= 1 } }
     /// Folded regions' hidden lines, sorted and apart: each takes no rows, so it takes no space
     /// and nothing draws it. A fold's first line isn't in its range; it stays.
     public private(set) var hiddenLines: [ClosedRange<Int>] = []
@@ -428,6 +428,10 @@ public final class DocumentLayout {
 
     public var lineCount: Int { text.lineCount }
     public var contentHeight: CGFloat { CGFloat(rowIndex.totalRows) + insets.height * 2 }
+    /// Changes whenever the rows might have: a line measured, hidden, shown, inserted or removed.
+    /// Lines can move with the total height unchanged (one taller, another shorter), so views
+    /// placed by line (the gutter's numbers) look again when this changes.
+    public private(set) var rowGeneration = 0
 
     /// A line's layout, measured now if it wasn't.
     public func layout(line: Int) -> LaidOutLine {

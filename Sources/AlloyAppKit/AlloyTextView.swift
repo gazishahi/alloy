@@ -494,6 +494,9 @@ public final class AlloyTextView: NSView, @preconcurrency NSTextInputClient, NSM
         // Past the edge: keep scrolling while the button is held.
         autoscroll(with: event)
         if autoscrollTimer == nil, !visibleRect.contains(convert(event.locationInWindow, from: nil)) {
+            // The timer fires on the main run loop, where the event came from; it's only handed
+            // back to `mouseUp` there.
+            nonisolated(unsafe) let event = event
             autoscrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let window = self.window else { return }

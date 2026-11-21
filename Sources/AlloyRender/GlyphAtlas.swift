@@ -3,22 +3,25 @@ import CoreText
 import Metal
 
 /// Where a rasterized glyph sits in the atlas, and how to place it relative to its pen position.
-struct AtlasEntry {
+package struct AtlasEntry {
     /// Pixels in the atlas texture.
-    let region: CGRect
+    package let region: CGRect
     /// Offset from the (pixel-snapped) pen position to the bitmap's top-left, in pixels.
-    let offset: CGPoint
-    let isColor: Bool
+    package let offset: CGPoint
+    package let isColor: Bool
 }
 
 /// Every glyph drawn, rasterized once by CoreGraphics into one BGRA texture: coverage in alpha
 /// (white) for ordinary glyphs, which the shader tints, and full color for emoji. Keyed by font,
 /// glyph, screen scale and a quarter-pixel horizontal position, so text sits where CoreText put
 /// it rather than snapped to whole pixels.
-@MainActor
-final class GlyphAtlas {
-    private(set) var texture: MTLTexture
-    private(set) var size: Int
+///
+/// Confined, not shared across threads: whoever makes an atlas uses it from one thread. The
+/// editors' renderers share one on the main actor; a terminal drawing on a render thread of its
+/// own keeps its own there (docs/SIDE_RFC_TERMINAL_ENGINE.md, Phase 1). No lock on the hot path.
+package final class GlyphAtlas {
+    package private(set) var texture: MTLTexture
+    package private(set) var size: Int
     private let device: MTLDevice
     static let subpixelSteps = 4
     /// It starts small (4 MB) and doubles when a document needs more glyphs than fit, up to this
@@ -31,6 +34,7 @@ final class GlyphAtlas {
         let glyph: CGGlyph
         let subpixel: Int
         let scale: CGFloat
+        let synthetic: SyntheticStyle
     }
 
     private var entries: [Key: AtlasEntry] = [:]
@@ -40,9 +44,9 @@ final class GlyphAtlas {
     private var penY = 1
     private var shelfHeight = 0
     /// Bumped when the atlas fills and starts over; a frame drawn from older entries redraws.
-    private(set) var generation = 0
+    package private(set) var generation = 0
 
-    init(device: MTLDevice, size: Int = 1024) {
+    package init(device: MTLDevice, size: Int = 1024) {
         self.device = device
         self.size = size
         texture = Self.makeTexture(device: device, size: size)
@@ -55,7 +59,7 @@ final class GlyphAtlas {
         return device.makeTexture(descriptor: descriptor)!
     }
 
-    var count: Int { entries.count }
+    package var count: Int { entries.count }
 
     /// Each font's name and size, asked of CoreText once: copying and bridging the name for
     /// every glyph of every frame was a tenth of a scrolling frame (2026-10-01). The fonts are
@@ -71,13 +75,23 @@ final class GlyphAtlas {
         return (name, size)
     }
 
-    func entry(font: CTFont, glyph: CGGlyph, subpixel: Int, scale: CGFloat, isColor: Bool) -> AtlasEntry? {
+    /// `synthetic`: a bold or italic drawn from a face that has none (a family with only a
+    /// regular), as Ghostty's font-synthetic-style does: bold by stroking each glyph's outline as
+    /// well as filling it, italic by slanting it 15° about the baseline.
+    package func entry(font: CTFont, glyph: CGGlyph, subpixel: Int, scale: CGFloat, isColor: Bool, synthetic: SyntheticStyle = []) -> AtlasEntry? {
         let (name, pointSize) = fontKey(font)
-        let key = Key(font: name, pointSize: pointSize, glyph: glyph, subpixel: subpixel, scale: scale)
+        let synthetic = isColor ? [] : synthetic
+        let key = Key(font: name, pointSize: pointSize, glyph: glyph, subpixel: subpixel, scale: scale, synthetic: synthetic)
         if let cached = entries[key] { return cached }
         var glyphCopy = glyph
         var bounds = CGRect.zero
         CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphCopy, &bounds, 1)
+        let stroke = synthetic.contains(.bold) ? SyntheticStyle.boldStroke(pointSize) : 0
+        if !bounds.isEmpty, synthetic.contains(.italic) {
+            // The slant moves a point right by its height above the baseline times tan 15°.
+            bounds = bounds.applying(SyntheticStyle.slant)
+        }
+        if !bounds.isEmpty, stroke > 0 { bounds = bounds.insetBy(dx: -stroke / 2, dy: -stroke / 2) }
         // A space has no ink: remember an empty entry so it isn't asked for again.
         guard bounds.width > 0, bounds.height > 0 else {
             let empty = AtlasEntry(region: .zero, offset: .zero, isColor: isColor)
@@ -111,6 +125,18 @@ final class GlyphAtlas {
             context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
             context.scaleBy(x: scale, y: scale)
             var position = CGPoint(x: (-minX + shift) / scale, y: -minY / scale)
+            if synthetic.contains(.italic) {
+                // About the pen at the baseline: draw at the origin of a slanted, moved space.
+                context.translateBy(x: position.x, y: position.y)
+                context.concatenate(SyntheticStyle.slant)
+                position = .zero
+            }
+            if stroke > 0 {
+                context.setTextDrawingMode(.fillStroke)
+                context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+                context.setLineWidth(stroke)
+                context.setLineJoin(.round)
+            }
             CTFontDrawGlyphs(font, &glyphCopy, &position, 1, context)
         }
         texture.replace(region: MTLRegionMake2D(penX, penY, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: bytesPerRow)
@@ -177,4 +203,18 @@ final class GlyphAtlas {
         shelfHeight = max(shelfHeight, height)
         return entry
     }
+}
+
+/// A style a face doesn't have, drawn from the one it does.
+package struct SyntheticStyle: OptionSet, Hashable, Sendable {
+    package let rawValue: UInt8
+    package init(rawValue: UInt8) { self.rawValue = rawValue }
+    package static let bold = SyntheticStyle(rawValue: 1 << 0)
+    package static let italic = SyntheticStyle(rawValue: 1 << 1)
+
+    /// tan 15°, Ghostty's synthetic italic.
+    static let slant = CGAffineTransform(a: 1, b: 0, c: 0.267949, d: 1, tx: 0, ty: 0)
+    /// The outline's stroke, in points: a fourteenth of the size, about the step from a regular
+    /// weight to a bold one at text sizes.
+    static func boldStroke(_ pointSize: CGFloat) -> CGFloat { max(pointSize / 14, 0.5) }
 }

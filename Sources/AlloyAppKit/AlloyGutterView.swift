@@ -120,7 +120,8 @@ public final class AlloyGutterView: NSView {
         var index = 0
         /// The first and last lines it drew and where they were: when rows are measured and the
         /// document's height changes, only a tile whose lines moved draws again.
-        var drawn: (first: Int, firstY: CGFloat, last: Int, lastY: CGFloat)?
+        /// Each line drawn and where: a tile is drawn again when any of them moved.
+        var drawn: [(line: Int, y: CGFloat)] = []
     }
 
     /// Draws a tile's layer through the gutter (a view can't be another layer's delegate).
@@ -140,9 +141,10 @@ public final class AlloyGutterView: NSView {
     private let drawer = TileDrawer()
     private var tiles: [Int: Tile] = [:]
     private var spareTiles: [Tile] = []
-    /// The document's height when the tiles were last drawn: rows are measured as lines are
-    /// first drawn (a wrapped line takes more than one), which moves every line after them.
-    private var drawnContentHeight: CGFloat = -1
+    /// The layout's rows when the tiles were last checked: rows are measured as lines are first
+    /// drawn (a wrapped line takes more than one, a diff's header its own height), which moves the
+    /// lines after them, sometimes with the total height unchanged.
+    private var checkedRowGeneration = -1
 
     // Layer-backed from the start: turning it on later marks the view as needing display,
     // which lays out the tiles, which turned it on again (a gutter outside a window has no
@@ -188,13 +190,9 @@ public final class AlloyGutterView: NSView {
         let top = editor.scrollView.convert(editor.scrollView.contentView.frame.origin, to: self).y
         let margin = viewport.height / 2
         let layout = editor.documentLayout
-        let height = layout.contentHeight
-        if height != drawnContentHeight {
-            drawnContentHeight = height
-            for tile in tiles.values {
-                guard let drawn = tile.drawn else { continue }
-                if layout.y(ofLine: drawn.first) != drawn.firstY || layout.y(ofLine: drawn.last) != drawn.lastY { tile.setNeedsDisplay() }
-            }
+        if layout.rowGeneration != checkedRowGeneration {
+            checkedRowGeneration = layout.rowGeneration
+            for tile in tiles.values where tile.drawn.contains(where: { layout.y(ofLine: $0.line) != $0.y }) { tile.setNeedsDisplay() }
         }
         let first = max(0, Int(floor((viewport.minY - margin) / Self.tileHeight)))
         let last = max(first, Int(floor((viewport.maxY + margin) / Self.tileHeight)))
@@ -238,8 +236,19 @@ public final class AlloyGutterView: NSView {
     var drawnLastLinesForTesting: [Int] {
         layoutTiles()
         for tile in tiles.values { tile.displayIfNeeded() }
-        return tiles.keys.sorted().compactMap { tiles[$0]?.drawn?.last }
+        return tiles.keys.sorted().compactMap { tiles[$0]?.drawn.last?.line }
     }
+
+    /// Lines whose number is drawn where the line no longer is, once the tiles marked for it
+    /// have redrawn (tests). Doesn't lay the tiles out first: that's what's under test.
+    var misplacedLinesForTesting: [Int] {
+        guard let layout = editor?.documentLayout else { return [] }
+        for tile in tiles.values { tile.displayIfNeeded() }
+        return tiles.values.flatMap { $0.drawn }.filter { layout.y(ofLine: $0.line) != $0.y }.map(\.line).sorted()
+    }
+
+    /// Where each shown tile sits, top down, by its index (tests).
+    var tileTopsForTesting: [Int: CGFloat] { tiles.mapValues { $0.frame.minY } }
 
     /// Follows a scroll: tiles move; only the ones coming into view are drawn.
     public func scrolled() { layoutTiles() }
@@ -256,9 +265,7 @@ public final class AlloyGutterView: NSView {
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
         context.setFillColor(numberColor.cgColor)
         let lines = layout.visibleLines(from: docTop, to: docTop + Self.tileHeight)
-        if let first = lines.first, let last = lines.last {
-            tile.drawn = (first.line, layout.y(ofLine: first.line), last.line, layout.y(ofLine: last.line))
-        }
+        tile.drawn = lines.map { ($0.line, $0.y) }
         for (line, y, laid) in lines {
             let rowTop = y - docTop
             // The first row's height and baseline: a heading's is taller than a line of code's.

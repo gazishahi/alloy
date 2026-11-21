@@ -17,7 +17,14 @@ public final class AlloyEditorView: NSView {
     public let scrollView = NSScrollView()
     public private(set) var buffer: TextBuffer
     public private(set) var documentLayout: DocumentLayout
-    public var theme: RenderTheme = .light { didSet { setNeedsRender(); minimap.needsDisplay = true } }
+    public var theme: RenderTheme = .light {
+        didSet {
+            // A translucent background composites with what's behind the view; an opaque one doesn't need to.
+            canvas.metalLayer.isOpaque = theme.background.w >= 1
+            setNeedsRender()
+            minimap.needsDisplay = true
+        }
+    }
     public var styles: ((Int) -> [StyleSpan])? { didSet { stylesChanged() } }
     /// Markup each line hides unless a selection touches it (live Markdown's `**`, `#`, a link's
     /// URL); see `DocumentLayout.concealment`. Nil: nothing hidden.
@@ -405,6 +412,11 @@ public final class AlloyEditorView: NSView {
         super.layout()
         updateWrapWidth()
         updateDocumentHeight()
+        // The gutter places its tiles by where this view's text sits in it, which is only right
+        // once this view has laid out: a gutter laid out first, while both grew (Changes' review
+        // column appearing), read the old height's difference as an offset and drew its numbers
+        // that far below their lines (2026-11-13).
+        gutter.layoutTiles()
         setNeedsRender()
     }
 
@@ -451,6 +463,7 @@ public final class AlloyEditorView: NSView {
         let fresh = MetalCanvas()
         fresh.metalLayer.device = renderer.device
         fresh.metalLayer.contentsScale = canvas.metalLayer.contentsScale
+        fresh.metalLayer.isOpaque = canvas.metalLayer.isOpaque
         fresh.frame = canvas.frame
         scrollView.addSubview(fresh, positioned: .below, relativeTo: scrollView.contentView)
         canvas.removeFromSuperview()
@@ -497,16 +510,20 @@ public final class AlloyEditorView: NSView {
         documentLayout.setWrapWidth(wrapsLines && width > 0 ? width : nil)
     }
 
-    /// The content height the gutter last placed its numbers for.
-    private var gutterContentHeight: CGFloat = -1
+    /// The rows the gutter last placed its numbers for.
+    private var gutterRowGeneration = -1
+
+    /// Lines measured taller or shorter (a wrap, a heading, a diff's header) move the numbers
+    /// after them, even when the document view's frame stays the window's height (a short file)
+    /// or the total height doesn't change.
+    private func syncGutterToRows() {
+        guard documentLayout.rowGeneration != gutterRowGeneration else { return }
+        gutterRowGeneration = documentLayout.rowGeneration
+        gutter.layoutTiles()
+    }
 
     func updateDocumentHeight() {
-        // Lines measured taller (a wrap, a heading) move the numbers after them, even when the
-        // document view's frame stays the window's height (a short file).
-        if documentLayout.contentHeight != gutterContentHeight {
-            gutterContentHeight = documentLayout.contentHeight
-            gutter.layoutTiles()
-        }
+        syncGutterToRows()
         let insets = scrollView.contentView.contentInsets
         let height = max(documentLayout.contentHeight, scrollView.contentView.bounds.height - insets.top - insets.bottom)
         let width = scrollView.contentView.bounds.width
